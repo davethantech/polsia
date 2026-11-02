@@ -18,4 +18,11 @@
 | Model token/cost accounting and billion-dollar revenue | NOT_IMPLEMENTED / not guaranteed | no provider configured, no business metrics |
 | Production readiness | NOT VERIFIED | missing security/load and deployment validation |
 
-Local tests: `python -m pytest -q` -> 28 passed (2026-11-02). These tests do not establish production safety or unrestricted autonomy.
+| Cultural evidence records and cross-tenant isolation | VERIFIED local | `app/culture.py`, `app/core.py`, `tests/test_cosmos_culture.py` |
+| NASA/JPL geocentric ephemeris request/parser | IMPLEMENTED_UNVERIFIED live (mocked provider tests only) | `app/cosmos.py`, tests |
+| Sidereal/tropical/nakshatra classification on supplied coordinate | VERIFIED local for conventional equal divisions | `app/cosmos.py`, tests; not a birth chart or forecast |
+| Bounded, opt-in cultural source refresh and deduplication | VERIFIED local with stubbed HTTPS; real network unverified | `app/core.py`, tests; min 24h, 10 per company |
+| Complete religion/history/astrology encyclopedia | NOT_IMPLEMENTED | seeded source directory only |
+| Machine-learned reasoning and automated high-impact decisions | NOT_IMPLEMENTED | no provider or independent decision agent |
+
+Local tests: `python -m pytest -q` -> 42 passed (2026-11-02). These tests do not establish production safety or unrestricted autonomy.

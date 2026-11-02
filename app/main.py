@@ -3,14 +3,14 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,Header,HTTPException,Depends
 from pydantic import BaseModel,Field
-from . import core,capacity
+from . import core,capacity,cosmos,culture
 
 @asynccontextmanager
 async def lifespan(_app):
     core.init_db()
     yield
 
-app=FastAPI(title='Autonomous Company Execution Core',version='0.2.0',lifespan=lifespan)
+app=FastAPI(title='Autonomous Company Execution Core',version='0.3.0',lifespan=lifespan)
 
 class Bootstrap(BaseModel):
     name:str=Field(min_length=1,max_length=120)
@@ -36,7 +36,7 @@ def owner(p=Depends(principal)):
     return p
 
 @app.get('/health')
-def health():return {'status':'ok','ai_provider':'unconfigured','internet_research':'enabled' if os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled','external_integrations':'unconfigured'}
+def health():return {'status':'ok','ai_provider':'unconfigured','internet_research':'enabled' if os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled','external_integrations':'unconfigured','cultural_source_refresh':'enabled' if os.environ.get('POLSIA_CULTURE_REFRESH_ENABLED')=='1' and os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled'}
 
 @app.get('/capacity')
 def get_capacity(p=Depends(principal)):
@@ -95,3 +95,78 @@ def approve(task_id:str,p=Depends(owner)):
 def events(mission_id:str,p=Depends(principal)):
     if core.get_mission(p['company_id'],mission_id) is None:raise HTTPException(404,'Mission not found')
     return core.get_events(p['company_id'],mission_id)
+
+
+# Knowledge and astronomy require evidence labeling. These endpoints are
+# authenticated, but they are NOT an AI general-reasoning or prediction service.
+@app.get('/cosmos/catalog')
+def cosmos_catalog(p=Depends(principal)):
+    return {'bodies':list(cosmos.BODIES),'provider':'NASA/JPL Horizons',
+            'live_availability':'not_checked','network_enabled':os.environ.get('POLSIA_NETWORK_ENABLED')=='1',
+            'limitations':'JPL ephemeris requires live access; astrology is cultural interpretation.'}
+
+class ZodiacInput(BaseModel):
+    longitude_deg:float
+    ayanamsha_deg:float|None=None
+    frame:str='ecliptic_of_date'
+
+@app.post('/cosmos/zodiac')
+def zodiac(data:ZodiacInput,p=Depends(principal)):
+    try:return cosmos.zodiac(data.longitude_deg,ayanamsha_deg=data.ayanamsha_deg,frame=data.frame)
+    except ValueError as e:raise HTTPException(422,str(e))
+
+@app.get('/culture/catalog')
+def culture_catalog(p=Depends(principal)):
+    return {'sources':culture.SOURCE_CATALOG,
+            'coverage':'seed_catalog_only_not_a_complete_world_knowledge_base',
+            'interpretations':'traditional_beliefs_are_not_empirical_predictions'}
+
+class CultureRecordInput(BaseModel):
+    title:str=Field(min_length=1,max_length=200)
+    tradition:str=Field(min_length=1,max_length=100)
+    topic:str=Field(min_length=1,max_length=120)
+    language:str=Field(default='',max_length=80)
+    work:str=Field(default='',max_length=200)
+    passage:str=Field(default='',max_length=200)
+    source_url:str=Field(min_length=1,max_length=2048)
+    evidence_class:str
+    content:str=Field(min_length=1,max_length=12000)
+
+@app.get('/culture/records')
+def culture_records(query:str='',limit:int=20,p=Depends(principal)):
+    return core.get_culture_records(p['company_id'],query,limit)
+
+@app.post('/culture/records',status_code=201)
+def culture_record(data:CultureRecordInput,p=Depends(owner)):
+    try:record_id=core.add_culture_record(p['company_id'],data.model_dump())
+    except ValueError as e:raise HTTPException(422,str(e))
+    return {'record_id':record_id,'review_status':'user_supplied_unverified'}
+
+class CultureSubscriptionInput(BaseModel):
+    title:str=Field(min_length=1,max_length=200)
+    tradition:str=Field(min_length=1,max_length=100)
+    url:str=Field(min_length=1,max_length=2048)
+    interval_hours:int=Field(default=24,ge=24,le=2160)
+
+@app.get('/culture/subscriptions')
+def culture_subscriptions(p=Depends(principal)):
+    return core.list_culture_subscriptions(p['company_id'])
+
+@app.post('/culture/subscriptions',status_code=201)
+def subscribe_culture(data:CultureSubscriptionInput,p=Depends(owner)):
+    try:subscription_id=core.create_culture_subscription(p['company_id'],data.model_dump())
+    except ValueError as e:raise HTTPException(422,str(e))
+    return {'subscription_id':subscription_id,'automatic_checks':
+        'enabled' if os.environ.get('POLSIA_CULTURE_REFRESH_ENABLED')=='1' and os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled'}
+
+@app.post('/culture/subscriptions/{subscription_id}/pause')
+def pause_culture(subscription_id:str,p=Depends(owner)):
+    if not core.change_culture_subscription(p['company_id'],subscription_id,'paused'):
+        raise HTTPException(404,'Subscription not found')
+    return {'status':'paused'}
+
+@app.post('/culture/subscriptions/{subscription_id}/resume')
+def resume_culture(subscription_id:str,p=Depends(owner)):
+    if not core.change_culture_subscription(p['company_id'],subscription_id,'active'):
+        raise HTTPException(404,'Subscription not found')
+    return {'status':'active'}

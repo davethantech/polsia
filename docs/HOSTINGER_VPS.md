@@ -35,3 +35,10 @@ Stop writer containers before taking a raw volume copy, or use SQLite's online b
 ## Explicit exclusions
 
 No automated provisioning of Hostinger resources, no internet-wide search, no model provider, no math theorem prover, no business-money guarantee, no live external actions, and no policy bypass. High-impact spending, production changes, sending messages and destructive actions need separate scoped permissions and approval policies. An autonomous agent may make routine, reversible, low-risk decisions within preauthorized limits; no safe platform can promise universal approval-free operation.
+
+
+## v0.3 cultural refresh resource policy
+
+Automatic cultural-source refresh is disabled by default. Enable `POLSIA_NETWORK_ENABLED=1` **and** `POLSIA_CULTURE_REFRESH_ENABLED=1` only after reviewing source rights, robots/terms and tenant quotas. Each company can create at most 10 HTTPS subscriptions with a refresh interval of 24–2160 hours. One background worker checks at most one due source when no mission task is pending. A source fetch must pass resource admission checks, URL/DNS/IP restrictions, response-length limits and timeouts. Remote text is stored as untrusted evidence, not instructions, and is not automatically treated as authoritative. Source refresh may be delayed when the VPS is under pressure. There is no online-learning model or guaranteed freshness interval.
+
+A NASA/JPL Horizons request relies on internet access and may fail or be unavailable; it is not guaranteed by the container configuration. JPL's J2000 reference plane and selected timescale must not be confused with an astrological chart's ecliptic-of-date or local time. The tool does not automatically turn positions into predictions.

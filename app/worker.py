@@ -1,5 +1,5 @@
 import argparse,time,os
-from .core import init_db,run_once
+from .core import init_db,run_once,refresh_due_culture_subscription
 
 def main():
     parser=argparse.ArgumentParser()
@@ -7,6 +7,8 @@ def main():
     args=parser.parse_args();init_db()
     while True:
         result=run_once()
+        if result is None:
+            result=refresh_due_culture_subscription()
         if result:
             # Do not dump retrieved web pages or company memory into VPS logs.
             print({'task_id':result.get('task_id'),'status':result['status'],'reasons':result.get('reasons')},flush=True)
