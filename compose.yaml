@@ -1,0 +1,54 @@
+# Hostinger KVM VPS: Docker containers, NOT nested virtual machines.
+# Change secrets and configure reverse-proxy HTTPS before public exposure.
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    init: true
+    logging:
+      driver: json-file
+      options:
+        max-size: '5m'
+        max-file: '3'
+    env_file: .env
+    environment:
+      POLSIADB: /srv/data/polsia.db
+    ports:
+      - '127.0.0.1:8080:8080'
+    volumes:
+      - state:/srv/data
+    cpus: '0.50'
+    mem_limit: 384m
+    memswap_limit: 512m
+    pids_limit: 100
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  worker:
+    build: .
+    restart: unless-stopped
+    init: true
+    logging:
+      driver: json-file
+      options:
+        max-size: '5m'
+        max-file: '3'
+    env_file: .env
+    environment:
+      POLSIADB: /srv/data/polsia.db
+    command: ["python","-m","app.worker","--poll-seconds","5"]
+    volumes:
+      - state:/srv/data
+    cpus: '0.60'
+    mem_limit: 768m
+    memswap_limit: 1024m
+    pids_limit: 100
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  state:

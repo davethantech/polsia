@@ -1,17 +1,21 @@
-# Feature traceability
+# Current implementation and evidence (2026-11-02)
 
-| Feature | Status | Evidence/verification |
+| Capability | Status | Evidence |
 |---|---|---|
-| Persistent company/mission/tasks | VERIFIED (local tests) | app/core.py; tests/test_core.py |
-| Dependency DAG validation and ordering | VERIFIED (local tests) | tests/test_core.py |
-| Tenant scoping for mission + approvals | VERIFIED (local tests) | tests/test_core.py |
-| Persisted approval gating | VERIFIED (local tests) | tests/test_core.py |
-| Bounded retry/fail state | VERIFIED (local tests) | tests/test_core.py |
-| Worker lease recovery | IMPLEMENTED_UNVERIFIED | app/core.py; expiration race tests missing |
-| Full user authentication/RBAC | PARTIALLY_IMPLEMENTED | company tokens only |
-| AI planning/provider execution | NOT_IMPLEMENTED | no AI adapter configured |
-| Independent production policy engine | NOT_IMPLEMENTED | only simple tool allowlist and owner checks |
-| True external action verification | NOT_IMPLEMENTED | local deterministic tools only |
-| Memory, software factory, company generator | NOT_IMPLEMENTED | no implementation |
-| CRM, growth, digital twin, analytics, marketplace | NOT_IMPLEMENTED | no implementation |
-| Production deployment | BLOCKED | no deployment environment; no deployment validation |
+| Persistent missions, task DAG, tenant-scoped access | VERIFIED local | `tests/test_core.py` |
+| Approval gates and failed-task handling | VERIFIED local | `tests/test_core.py`, `tests/test_capabilities.py` |
+| Lease fencing and dependency failure propagation | VERIFIED local | `tests/test_capabilities.py` |
+| Cgroup-aware capacity admission | VERIFIED by deterministic tests; NOT VPS validated | `app/capacity.py`, `tests/test_capabilities.py` |
+| Exact bounded arithmetic | VERIFIED local | `app/mathematics.py`, `tests/test_capabilities.py` |
+| Private network/SSRF rejection | VERIFIED by mocked DNS tests; live service unverified | `app/research.py` |
+| Real HTTPS research on configured internet | IMPLEMENTED_UNVERIFIED (live); mocked tests only | `app/research.py`, opt-in flag |
+| Persistent company knowledge and basic text retrieval | VERIFIED local | `app/core.py`, `tests/test_capabilities.py` |
+| Usage measurements and estimated capacity | VERIFIED local (estimates explicitly assumptions) | `app/core.py`, tests |
+| Docker resource limits for Hostinger | IMPLEMENTED_UNVERIFIED (no VPS deploy) | `compose.yaml`, `Dockerfile` |
+| Multi-provider AI agents, advanced reasoning, semantic graph | NOT_IMPLEMENTED | no real adapters or agent models |
+| Global internet search, continuous crawling | NOT_IMPLEMENTED | only bounded URL fetch |
+| VM-based untrusted code isolation | BLOCKED on typical nested-virtualization-disabled Hostinger VPS | container-only config; separate sandbox required |
+| Model token/cost accounting and billion-dollar revenue | NOT_IMPLEMENTED / not guaranteed | no provider configured, no business metrics |
+| Production readiness | NOT VERIFIED | missing security/load and deployment validation |
+
+Local tests: `python -m pytest -q` -> 28 passed (2026-11-02). These tests do not establish production safety or unrestricted autonomy.

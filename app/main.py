@@ -1,13 +1,16 @@
 """Small operational API. No AI provider or external integration is claimed."""
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI,Header,HTTPException,Depends
 from pydantic import BaseModel,Field
-from . import core
+from . import core,capacity
 
-app=FastAPI(title='Autonomous Company Execution Core',version='0.1.0')
+@asynccontextmanager
+async def lifespan(_app):
+    core.init_db()
+    yield
 
-@app.on_event('startup')
-def startup(): core.init_db()
+app=FastAPI(title='Autonomous Company Execution Core',version='0.2.0',lifespan=lifespan)
 
 class Bootstrap(BaseModel):
     name:str=Field(min_length=1,max_length=120)
@@ -33,13 +36,43 @@ def owner(p=Depends(principal)):
     return p
 
 @app.get('/health')
-def health():return {'status':'ok','ai_provider':'unconfigured','external_integrations':'unconfigured'}
+def health():return {'status':'ok','ai_provider':'unconfigured','internet_research':'enabled' if os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled','external_integrations':'unconfigured'}
+
+@app.get('/capacity')
+def get_capacity(p=Depends(principal)):
+    return capacity.capacity()
+
+@app.get('/knowledge')
+def knowledge(query:str='',limit:int=20,p=Depends(principal)):
+    return core.search_knowledge(p['company_id'],query,limit)
+
+class MemoryInput(BaseModel):
+    layer:str='company'
+    content:str=Field(min_length=1,max_length=12000)
+    source:str=Field(default='',max_length=2048)
+
+@app.post('/knowledge',status_code=201)
+def add_knowledge(data:MemoryInput,p=Depends(owner)):
+    try: memory_id=core.store_knowledge(p['company_id'],data.layer,data.content,data.source)
+    except ValueError as e:raise HTTPException(422,str(e))
+    return {'memory_id':memory_id,'evidence_status':'user_supplied_unverified'}
+
+@app.get('/usage')
+def usage(p=Depends(principal)):
+    return core.get_usage(p['company_id'])
 
 @app.post('/bootstrap',status_code=201)
 def bootstrap(body:Bootstrap,x_bootstrap_token:str=Header(default='')):
     configured=os.environ.get('BOOTSTRAP_TOKEN','')
     if not configured or x_bootstrap_token!=configured:raise HTTPException(403,'Bootstrap disabled or denied')
     return core.create_company(body.name)
+
+@app.post('/missions/estimate')
+def estimate(body:MissionSpec,p=Depends(owner)):
+    try:
+        result=core.estimate_mission([t.model_dump() for t in body.tasks])
+    except ValueError as e:raise HTTPException(422,str(e))
+    return {**result,'capacity':capacity.capacity()}
 
 @app.post('/missions',status_code=201)
 def create_mission(body:MissionSpec,p=Depends(owner)):
