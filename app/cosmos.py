@@ -69,7 +69,8 @@ def horizons_url(body, date_utc):
     # date interpretation; ECLIPTIC is J2000, not ecliptic of date.
     params={'format':'text','COMMAND':f"'{BODIES[body]}'",'OBJ_DATA':'NO',
             'MAKE_EPHEM':'YES','EPHEM_TYPE':'VECTORS','CENTER':"'500@399'",
-            'REF_PLANE':'ECLIPTIC','OUT_UNITS':'KM-S','VEC_TABLE':'2',
+            'REF_PLANE':'ECLIPTIC','REF_SYSTEM':'ICRF','OUT_UNITS':'KM-S',
+            'VEC_TABLE':'2','VEC_LABELS':'NO','VEC_CORR':'NONE','CAL_TYPE':'GREGORIAN',
             'CSV_FORMAT':'YES','TLIST':f"'{date_utc} 00:00'",
             'TLIST_TYPE':'CAL','TIME_TYPE':'UT'}
     return HORIZONS_ENDPOINT+'?'+urlencode(params)

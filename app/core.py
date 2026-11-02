@@ -53,7 +53,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_culture_subscriptions_due ON culture_subscriptions(status,next_due);
         ''')
         # Add the lease-fencing token without deleting preexisting user data.
-        if 'lease_token' not in {r['name'] for r in db.execute('PRAGMA table_info(tasks)')}: 
+        if 'lease_token' not in {r['name'] for r in db.execute('PRAGMA table_info(tasks)')}:
             db.execute('ALTER TABLE tasks ADD COLUMN lease_token TEXT')
 
 def log(db, company_id, kind, detail, mission_id=None, task_id=None):

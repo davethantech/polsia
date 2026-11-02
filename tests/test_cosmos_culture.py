@@ -34,6 +34,8 @@ def test_horizons_fixed_parameters_and_hard_limits():
     assert q['REF_PLANE']==['ECLIPTIC']
     assert q['CENTER']==["'500@399'"]
     assert q['TIME_TYPE']==['UT']
+    assert q['VEC_LABELS']==['NO']
+    assert q['VEC_CORR']==['NONE']
     assert q['TLIST_TYPE']==['CAL']
     assert q['TLIST']==["'2026-11-02 00:00'"]
     assert 'START_TIME' not in q
