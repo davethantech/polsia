@@ -1,4 +1,4 @@
-"""No paid provider calls: deterministic network stubs test contracts only."""
+"""No real model calls: deterministic local-runtime stubs test contracts only."""
 import io
 import json
 import os
@@ -15,16 +15,16 @@ from app.main import app
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(core, 'DB_PATH', str(tmp_path / 'intelligence.sqlite'))
     for name in ('POLSIA_AI_ENABLED','POLSIA_NETWORK_ENABLED','POLSIA_OPENAI_API_KEY',
-                 'POLSIA_OPENAI_MODEL','POLSIA_AI_DAILY_CALL_LIMIT'):
+                 'POLSIA_OPENAI_MODEL','POLSIA_LOCAL_AI_URL', 'POLSIA_LOCAL_MODEL','POLSIA_AI_DAILY_CALL_LIMIT'):
         monkeypatch.delenv(name, raising=False)
     core.init_db()
 
 
 def enabled(monkeypatch):
     monkeypatch.setenv('POLSIA_AI_ENABLED', '1')
-    monkeypatch.setenv('POLSIA_NETWORK_ENABLED', '1')
-    monkeypatch.setenv('POLSIA_OPENAI_MODEL', 'test-research-model')
-    monkeypatch.setenv('POLSIA_OPENAI_API_KEY', 'test-only-not-a-real-key')
+    monkeypatch.setenv('POLSIA_NETWORK_ENABLED', '0')  # Local inference must work offline.
+    monkeypatch.setenv('POLSIA_LOCAL_MODEL', 'test-research-model')
+    monkeypatch.setenv('POLSIA_LOCAL_AI_URL', 'http://127.0.0.1:11434')
 
 
 def source(company, content='Vedic astrology is a traditional cultural practice.'):
@@ -49,20 +49,23 @@ def fake_provider(monkeypatch, answer='A documented cultural practice.', citatio
                   returned_model='test-research-model', calls=None):
     def fake(req, timeout):
         if calls is not None: calls.append(req)
-        assert req.full_url == providers.ENDPOINT
+        assert req.full_url == providers.local_endpoint() + '/api/chat'
         assert timeout == providers.TIMEOUT_SECONDS
         req_body = json.loads(req.data)
-        assert req_body['store'] is False and req_body['max_output_tokens'] <= 600
-        assert req_body['text']['format']['type'] == 'json_schema'
-        context = json.loads(req_body['input'])
+        assert req_body['stream'] is False and req_body['options']['num_predict'] <= 600
+        assert req_body['format']['type'] == 'object'
+        assert req_body['keep_alive'] == '0'
+        assert all('Authorization' not in x for x in req.headers)
+        context = json.loads(req_body['messages'][1]['content'])
         chosen = citation or context['evidence'][0]['citation_id']
         output = {
             'answer': answer, 'citations': [chosen], 'confidence': 'low',
             'limitations': 'Not independently verified; historical/cultural interpretation.',
         }
-        response = {'id': 'resp_test', 'model': returned_model, 'status': status,
-                    'output': [{'type':'message','content':[{'type':'output_text','text':json.dumps(output)}]}],
-                    'usage': {'input_tokens': 80, 'output_tokens': 35}}
+        response = {'model': returned_model, 'done': status == 'completed',
+                    'done_reason': 'stop' if status == 'completed' else 'length',
+                    'message': {'role':'assistant', 'content':json.dumps(output)},
+                    'prompt_eval_count': 80, 'eval_count': 35}
         return DummyResponse(json.dumps(response).encode())
     monkeypatch.setattr(providers, '_open', fake)
 
@@ -144,7 +147,7 @@ def test_structured_provider_answer_has_real_provenance_and_accounting(monkeypat
     assert len(sent) == 1
     assert core.run_once() is None  # Not replayed on subsequent worker polls.
     events = core.get_events(c, mid)
-    assert 'test-only-not-a-real-key' not in repr(events)
+    assert 'POLSIA_OPENAI_API_KEY' not in repr(events)
     assert 'A documented cultural practice' not in repr(events)
 
 
@@ -187,9 +190,9 @@ def test_source_injection_remains_untrusted_input_not_system_instruction(monkeyp
     ask(c)
     assert core.run_once()['status'] == 'SUCCEEDED'
     body = json.loads(calls[0].data)
-    assert 'Ignore all previous' not in body['instructions']
-    assert 'Ignore all previous' in body['input']
-    assert 'untrusted' in body['instructions']
+    assert 'Ignore all previous' not in body['messages'][0]['content']
+    assert 'Ignore all previous' in body['messages'][1]['content']
+    assert 'untrusted' in body['messages'][0]['content']
 
 
 def test_per_tenant_daily_quota_no_hidden_retries(monkeypatch):
@@ -236,11 +239,11 @@ def test_provider_http_error_is_sanitized(monkeypatch):
     c = core.create_company('AI Company')['company_id']
     source(c)
     def bad(*args, **kwargs):
-        raise urllib.error.HTTPError(providers.ENDPOINT,429,'secret-key-in-error',{},None)
+        raise urllib.error.HTTPError(providers.local_endpoint() + '/api/chat',429,'secret-key-in-error',{},None)
     monkeypatch.setattr(providers,'_open',bad)
     mid = ask(c)
     r = core.run_once()
-    assert r['status']=='FAILED' and r['error']=='Provider HTTP error 429'
+    assert r['status']=='FAILED' and r['error']=='Local runtime HTTP error 429'
     assert 'secret-key' not in repr(core.get_events(c,mid))
     assert core.get_usage(c)['ai_calls']==1
 
@@ -262,8 +265,8 @@ def test_provider_redirect_is_never_followed(monkeypatch):
     enabled(monkeypatch)
     # NoRedirect disables credential forwarding even if the upstream service
     # or an intermediary tries to relocate the request.
-    req=providers.urllib.request.Request(providers.ENDPOINT,
-        headers={'Authorization':'Bearer placeholder'},data=b'{}')
+    req=providers.urllib.request.Request(providers.local_endpoint() + '/api/chat',
+        data=b'{}')
     assert providers.NoRedirect().redirect_request(req,None,302,'Moved',{},
         'https://other.example/steal') is None
 
@@ -273,12 +276,11 @@ def test_unreported_usage_cannot_be_silently_made_up(monkeypatch):
     c=core.create_company('Unknown usage')['company_id']
     source(c)
     def no_usage(req,timeout):
-        context=json.loads(json.loads(req.data)['input'])
+        context=json.loads(json.loads(req.data)['messages'][1]['content'])
         ref=context['evidence'][0]['citation_id']
-        document={'id':'test','status':'completed','model':'test-research-model',
-            'output':[{'type':'message','content':[{'type':'output_text',
-             'text':json.dumps({'answer':'A cited view','citations':[ref],
-                 'confidence':'low','limitations':'unverified'})}]}]}
+        document={'done':True,'done_reason':'stop','model':'test-research-model',
+            'message':{'role':'assistant','content':json.dumps({'answer':'A cited view','citations':[ref],
+                 'confidence':'low','limitations':'unverified'})}}
         return DummyResponse(json.dumps(document).encode())
     monkeypatch.setattr(providers,'_open',no_usage)
     ask(c)
