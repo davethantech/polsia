@@ -38,3 +38,17 @@ Local tests: `python -m pytest -q` -> 42 passed (2026-11-02). These tests do not
 | Tenant-scoped daily provider call budget and token accounting | VERIFIED local for quotas/recorded mock usage; actual dollars NOT IMPLEMENTED | `app/core.py`, `tests/test_intelligence.py` |
 | Autonomous internet-wide research, semantic/vector memory, independent reasoning agents | NOT IMPLEMENTED | Future milestone |
 | Production model availability, scientific correctness, actual provider billing, Hostinger deployment | BLOCKED/UNVERIFIED | Requires real configuration, external evidence and deployment validation |
+
+## v0.5 browser and company access (2026-11-04)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Responsive cinematic landing + mission-control frontend | IMPLEMENTED_UNVERIFIED (visual/browser QA pending) | `app/static/index.html`, `dashboard.html`, `styles.css`, `app.js`; HTTP contract tests |
+| Password-hashed users, login, cookie sessions | VERIFIED (local API tests) | `app/identity.py`, `tests/test_multitenant_ui.py` |
+| Tenant authorization for API + company switching | VERIFIED (local API tests) | `app/main.py`, `tests/test_multitenant_ui.py` |
+| Role-scoped company invitations | VERIFIED (local API tests) | `app/identity.py`, `tests/test_multitenant_ui.py` |
+| CSRF protection, no-store and CSP | VERIFIED (local API tests) | `app/main.py`, tests |
+| Dashboard real mission, events and task counts | IMPLEMENTED_UNVERIFIED (browser user journey pending) | `app/core.py` overview/list queries + `app/static/app.js` |
+| Single-host online SQLite backup | VERIFIED (local integration test) | `scripts/backup_sqlite.py` |
+| PostgreSQL RLS, penetration testing, VPS validation | NOT IMPLEMENTED/UNVERIFIED | See `docs/FRONTEND_AND_SECURITY.md` |
+| Hostinger production deployment | BLOCKED | No production VPS access or live deployment test |

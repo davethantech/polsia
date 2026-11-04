@@ -519,3 +519,36 @@ def refresh_due_culture_subscription():
                 {'subscription_id':entry['id'],'error_type':type(exc).__name__})
             db.commit()
         return {'status':'FAILED','subscription_id':entry['id'],'error_type':type(exc).__name__}
+
+
+def list_missions(company_id, limit=50):
+    """Read-only tenant-scoped mission summaries; never leak other workspaces."""
+    with connect() as db:
+        results=[dict(r) for r in db.execute('''SELECT m.id,m.objective,m.status,m.created_at,
+          COUNT(t.id) AS task_count,
+          SUM(CASE WHEN t.status='SUCCEEDED' THEN 1 ELSE 0 END) AS succeeded_tasks,
+          SUM(CASE WHEN t.status='WAITING_APPROVAL' THEN 1 ELSE 0 END) AS pending_approvals
+          FROM missions m LEFT JOIN tasks t ON m.id=t.mission_id AND m.company_id=t.company_id
+          WHERE m.company_id=? GROUP BY m.id ORDER BY m.created_at DESC,m.rowid DESC LIMIT ?''',
+          (company_id,min(100,max(1,limit))))]
+    return results
+
+
+def workspace_overview(company_id):
+    with connect() as db:
+        companies=db.execute('SELECT name FROM companies WHERE id=?',(company_id,)).fetchone()
+        if companies is None:return None
+        statuses={r['status']:r['n'] for r in db.execute('SELECT status,COUNT(*) AS n FROM tasks WHERE company_id=? GROUP BY status',(company_id,))}
+        mission_statuses={r['status']:r['n'] for r in db.execute('SELECT status,COUNT(*) AS n FROM missions WHERE company_id=? GROUP BY status',(company_id,))}
+        memories=db.execute('SELECT COUNT(*) AS n FROM knowledge WHERE company_id=?',(company_id,)).fetchone()['n']
+        culture_count=db.execute('SELECT COUNT(*) AS n FROM culture_records WHERE company_id=?',(company_id,)).fetchone()['n']
+        active_agents=0 # This project has no implemented specialist-agent registry.
+        recent=[dict(r) for r in db.execute('''SELECT id,event_type,detail,mission_id,task_id,created_at FROM events
+          WHERE company_id=? ORDER BY created_at DESC,rowid DESC LIMIT 12''',(company_id,))]
+        approvals=[dict(r) for r in db.execute('''SELECT t.id,t.name,t.mission_id,m.objective
+          FROM tasks t JOIN missions m ON m.id=t.mission_id AND m.company_id=t.company_id
+          WHERE t.company_id=? AND t.status='WAITING_APPROVAL' ORDER BY t.updated_at DESC LIMIT 20''',(company_id,))]
+    return {'company':{'id':company_id,'name':companies['name']},'tasks':statuses,
+            'missions':mission_statuses,'knowledge_records':memories,
+            'culture_records':culture_count,'active_ai_agents':active_agents,
+            'recent_events':recent,'approvals':approvals,'usage':get_usage(company_id)}

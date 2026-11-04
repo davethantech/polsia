@@ -15,3 +15,7 @@ A module is complete only after it can be tested for actual persistence, effects
 ## Next dependency: beyond the v0.4 proof of research execution
 
 The bounded provider integration and source-ID checks do not solve factual verification or multi-agent autonomy. Add PostgreSQL RLS, real research indexing, evidence freshness and contradiction detection, verified model cost attribution, independently evaluated agents and safe orchestration before expanding to autonomous business operations.
+
+## v0.5 milestone
+
+Built locally: cinematic landing page, real-data mission control frontend, user/password login, tenant membership/roles, invitation redemption, CSRF-protected browser sessions, workspace selection, mission/knowledge/team/capacity operations, single-host SQLite backup helper and an example HTTPS reverse proxy. All changes must still receive CI and live browser/deployment validation. Next dependency: PostgreSQL + RLS, distributed sessions, concurrency testing, reverse-proxy hardening and deployed Hostinger test environment, before claiming production readiness.

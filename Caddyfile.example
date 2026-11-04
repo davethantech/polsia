@@ -1,0 +1,21 @@
+# Copy to /etc/caddy/Caddyfile and replace the example domain with yours.
+# DNS A/AAAA records must point at your VPS; Caddy manages ACME certificates.
+example.com {
+    encode zstd gzip
+    request_body {
+        max_size 1MB
+    }
+    reverse_proxy 127.0.0.1:8080 {
+        transport http {
+            read_timeout 40s
+            dial_timeout 5s
+        }
+    }
+    log {
+        output file /var/log/caddy/polsia-access.log {
+            roll_size 5MiB
+            roll_keep 4
+        }
+        format json
+    }
+}

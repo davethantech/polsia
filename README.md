@@ -1,3 +1,28 @@
+# Polsia — AI Company Operating System (v0.5)
+
+**Live, original cinematic frontend:** `/` landing page and `/dashboard` mission control; both served by the same FastAPI application without CDN dependencies.
+
+**Multi-company identity:** registered users, hashed-password sign-in, secure cookie sessions, separate company memberships, enforced tenant scope, owner/editor/viewer permissions, one-time invitations, and company switcher.
+
+**Actual execution:** the existing persistent worker, resource governor, knowledge and cultural memory, source-linked research, and opt-in AI provider integration remain integrated with the dashboard.
+
+**Status:** functional single-host beta; **not certified production-ready**. See [Frontend, security and deployment checklist](docs/FRONTEND_AND_SECURITY.md) and [Hostinger deployment guidance](docs/HOSTINGER_VPS.md).
+
+## Run
+
+```bash
+python -m pip install -r requirements.txt
+export POLSIA_SIGNUP_ENABLED=1 # for initial developer registration only
+uvicorn app.main:app --host 127.0.0.1 --port 8080
+# in a separate terminal
+python -m app.worker
+# http://localhost:8080/
+```
+
+`POLSIA_SIGNUP_ENABLED=0` by default: enable only to create the first company, then disable. A session is user-scoped; every company API operation enforces the selected tenant's membership. In production, require HTTPS cookies, disable the legacy bootstrap token, and review the outstanding limitations.
+
+---
+
 # Autonomous Company Execution Core — verified local slice
 
 A **functional, limited execution kernel**, not the full requested AI Company Operating System. AI models, autonomous general intelligence, software engineering containers, CRM, billing, and commercial integrations are **NOT IMPLEMENTED**. Bounded opt-in public HTTPS retrieval and cultural-source refresh are implemented but not live verified. The `internal.echo` and `internal.add` tools are genuine deterministic local operations, not autonomous AI employees.
