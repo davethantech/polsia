@@ -32,7 +32,7 @@ Local tests: `python -m pytest -q` -> 42 passed (2026-11-02). These tests do not
 | Capability | Status | Evidence |
 |---|---|---|
 | Tenant-scoped keyword retrieval across company knowledge and culture | VERIFIED local | `app/evidence.py`, `tests/test_intelligence.py` |
-| OpenAI Responses adapter with bounded requests and strict JSON | IMPLEMENTED_UNVERIFIED (live); automated mocked tests | `app/providers.py`, `tests/test_intelligence.py` |
+| Local Ollama adapter with bounded requests and strict JSON | VERIFIED in stubbed tests; live inference UNVERIFIED | `app/providers.py`, `tests/test_intelligence.py` |
 | Retrieved citation-ID validation, unverified-source labeling | VERIFIED for ID checks only; factual truth UNVERIFIED | `app/intelligence.py`, `tests/test_intelligence.py` |
 | Persistent worker research missions and read-only question API | VERIFIED local with mocked provider | `app/core.py`, `app/main.py` |
 | Tenant-scoped daily provider call budget and token accounting | VERIFIED local for quotas/recorded mock usage; actual dollars NOT IMPLEMENTED | `app/core.py`, `tests/test_intelligence.py` |
@@ -52,3 +52,16 @@ Local tests: `python -m pytest -q` -> 42 passed (2026-11-02). These tests do not
 | Single-host online SQLite backup | VERIFIED (local integration test) | `scripts/backup_sqlite.py` |
 | PostgreSQL RLS, penetration testing, VPS validation | NOT IMPLEMENTED/UNVERIFIED | See `docs/FRONTEND_AND_SECURITY.md` |
 | Hostinger production deployment | BLOCKED | No production VPS access or live deployment test |
+
+## v0.6 self-hosted neural and bounded multitasking (2026-11-04)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Local-only Ollama adapter, no cloud endpoint/configurable cloud URL | VERIFIED stubbed tests; live Ollama unverified | `app/providers.py`, `tests/test_local_si.py` |
+| Hostinger container isolated model endpoint, resource caps | CONFIGURED; deployment unverified | `compose.yaml` |
+| Tenant-specific trainable two-layer neural relevance ranker | VERIFIED local algorithm and tenant tests | `app/neural.py`, `tests/test_neural.py` |
+| Versioned, bounded evaluated training feedback | VERIFIED local; feedback does not prove factual truth | `app/core.py`, `tests/test_neural.py` |
+| At most two parallel independent task executions | VERIFIED local with SQLite task claims | `app/worker.py`, `tests/test_neural.py` |
+| Train capable general-purpose model entirely from scratch | NOT IMPLEMENTED | Requires training data, computing capacity and evaluation infrastructure |
+| Full autonomous one-machine-company functionality | NOT IMPLEMENTED | CRM, sales outreach, software factory and human-facing controls incomplete |
+| Real VPS deployment and live inference performance | UNVERIFIED | Requires VPS and installed licensed model |

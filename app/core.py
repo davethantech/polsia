@@ -1,7 +1,7 @@
 """Persistent, tenant-scoped execution kernel. SQLite is for single-host development."""
 import hashlib, json, os, secrets, sqlite3, time, uuid
 from contextlib import contextmanager
-from . import capacity, mathematics, research, cosmos, culture, evidence, providers, intelligence
+from . import capacity, mathematics, research, cosmos, culture, evidence, providers, intelligence, learning, neural
 
 DB_PATH = os.environ.get('POLSIADB', 'polsia.db')
 
@@ -51,6 +51,15 @@ def init_db():
             UNIQUE(company_id,url)
         );
         CREATE INDEX IF NOT EXISTS idx_culture_subscriptions_due ON culture_subscriptions(status,next_due);
+        CREATE TABLE IF NOT EXISTS learning_subscriptions (
+            id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES companies(id),
+            title TEXT NOT NULL, topic TEXT NOT NULL, url TEXT NOT NULL,
+            interval_seconds INTEGER NOT NULL, next_due INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('active','paused')),
+            last_checked INTEGER, last_sha256 TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(company_id,url)
+        );
+        CREATE INDEX IF NOT EXISTS idx_learning_due ON learning_subscriptions(status,next_due);
         CREATE TABLE IF NOT EXISTS ai_calls (
             task_id TEXT PRIMARY KEY REFERENCES tasks(id),
             company_id TEXT NOT NULL REFERENCES companies(id),
@@ -59,6 +68,19 @@ def init_db():
             input_tokens INTEGER, output_tokens INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_ai_calls_company_day ON ai_calls(company_id,attempted_at);
+        CREATE TABLE IF NOT EXISTS neural_rankers (
+            company_id TEXT PRIMARY KEY REFERENCES companies(id),
+            weights TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0,
+            feedback_count INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS neural_feedback (
+            id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES companies(id),
+            question TEXT NOT NULL, preferred_id TEXT NOT NULL, rejected_id TEXT NOT NULL,
+            loss_before REAL NOT NULL, loss_after REAL NOT NULL, created_at INTEGER NOT NULL,
+            UNIQUE(company_id,question,preferred_id,rejected_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_neural_feedback_tenant ON neural_feedback(company_id,created_at);
+
         ''')
         # Add the lease-fencing token without deleting preexisting user data.
         if 'lease_token' not in {r['name'] for r in db.execute('PRAGMA table_info(tasks)')}:
@@ -125,7 +147,7 @@ def get_usage(company_id):
                     if ai['unknown_usage']==0 and ai['input_tokens'] is not None
                     and ai['output_tokens'] is not None else None),
                 'provider_cost_usd':None,
-                'note':'Model token usage is provider-reported when available; pricing/billing is not integrated.'}
+                'note':'Model token usage is local-runtime-reported when available; hosting/electricity costs are not measured.'}
 
 def estimate_mission(task_specs):
     """Planning estimates, not guaranteed capacity or billable charges."""
@@ -157,7 +179,7 @@ def daily_ai_call_limit():
 def reserve_ai_call(company_id, task_id, model):
     '''Atomic daily tenant call budget and at-most-once attempt per task.
 
-    A timeout can still bill externally; no silent retry is attempted.
+    Local inference consumes VPS capacity; no silent retry is attempted.
     '''
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -552,3 +574,148 @@ def workspace_overview(company_id):
             'missions':mission_statuses,'knowledge_records':memories,
             'culture_records':culture_count,'active_ai_agents':active_agents,
             'recent_events':recent,'approvals':approvals,'usage':get_usage(company_id)}
+
+
+def create_learning_subscription(company_id, fields):
+    """Owner/editor authorizes a particular source; worker won't discover random URLs."""
+    item = learning.validate_source(fields)
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        count = db.execute('SELECT COUNT(*) FROM learning_subscriptions WHERE company_id=?',
+                           (company_id,)).fetchone()[0]
+        if count >= 10:
+            raise ValueError('Maximum 10 learning sources per company')
+        source_id = uid()
+        try:
+            db.execute('''INSERT INTO learning_subscriptions
+                (id,company_id,title,topic,url,interval_seconds,next_due,status)
+                VALUES(?,?,?,?,?,?,?,'active')''',
+                (source_id, company_id, item['title'], item['topic'], item['url'],
+                 item['interval_seconds'], now()))
+        except sqlite3.IntegrityError as exc:
+            raise ValueError('Already following this learning source') from exc
+        log(db,company_id,'learning.source_created',{'source_id':source_id,'url':item['url']})
+        db.commit()
+    return source_id
+
+
+def list_learning_subscriptions(company_id):
+    with connect() as db:
+        return [dict(r) for r in db.execute('''SELECT * FROM learning_subscriptions
+            WHERE company_id=? ORDER BY rowid''',(company_id,))]
+
+
+def change_learning_subscription(company_id, source_id, status):
+    if status not in ('active','paused'):
+        raise ValueError('Invalid learning source status')
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        cur=db.execute('''UPDATE learning_subscriptions SET status=?,next_due=?
+            WHERE id=? AND company_id=?''',(status,now(),source_id,company_id))
+        if cur.rowcount != 1:
+            db.rollback();return False
+        log(db,company_id,'learning.source_status',{'source_id':source_id,'status':status})
+        db.commit()
+    return True
+
+
+def refresh_due_learning_subscription():
+    """Poll at most one subscribed page, and only while capacity is safe.
+
+    Source snapshots remain UNVERIFIED and cannot give instructions to agents.
+    Reserve next poll before I/O to prevent request storms on worker restart.
+    """
+    if (os.environ.get('POLSIA_NETWORK_ENABLED')!='1' or
+            os.environ.get('POLSIA_LEARNING_ENABLED')!='1'):
+        return None
+    admit=capacity.admit(capacity.snapshot(),estimated_memory_mb=64,estimated_disk_mb=2)
+    if not admit['admitted']:
+        return {'status':'THROTTLED','reasons':admit['reasons']}
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute('''SELECT * FROM learning_subscriptions
+            WHERE status='active' AND next_due<=? ORDER BY next_due,id LIMIT 1''',(now(),)).fetchone()
+        if not row:
+            db.rollback();return None
+        entry=dict(row)
+        db.execute('''UPDATE learning_subscriptions
+            SET next_due=?,attempts=attempts+1 WHERE id=?''',
+            (now()+entry['interval_seconds'],entry['id']))
+        db.commit()
+    try:
+        fetched=research.fetch_public(entry['url'])
+        if not fetched['excerpt'].strip():
+            raise ValueError('Empty source')
+        with connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            current=db.execute('SELECT status,last_sha256 FROM learning_subscriptions WHERE id=? AND company_id=?',
+                               (entry['id'],entry['company_id'])).fetchone()
+            if not current or current['status']!='active':
+                db.rollback()
+                return {'status':'CANCELLED','source_id':entry['id']}
+            changed = fetched['sha256'] != current['last_sha256']
+            if changed:
+                store_knowledge(entry['company_id'],'research',
+                                'Topic: '+entry['topic']+'\n'+fetched['excerpt'][:11800],
+                                fetched['url'],'retrieved_unverified',db=db)
+            db.execute('''UPDATE learning_subscriptions SET last_checked=?,last_sha256=? WHERE id=?''',
+                       (now(),fetched['sha256'],entry['id']))
+            log(db,entry['company_id'],'learning.source_checked',
+                {'source_id':entry['id'],'changed':changed,'sha256':fetched['sha256']})
+            db.commit()
+        return {'status':'RETRIEVED_UNVERIFIED' if changed else 'UNCHANGED',
+                'source_id':entry['id']}
+    except Exception as exc:
+        with connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            log(db,entry['company_id'],'learning.source_failed',
+                {'source_id':entry['id'],'error_type':type(exc).__name__})
+            db.commit()
+        return {'status':'FAILED','source_id':entry['id'],'error_type':type(exc).__name__}
+
+
+def neural_status(company_id):
+    """Only company-scoped model information; no company-to-company weight sharing."""
+    with connect() as db:
+        row=db.execute('SELECT version,feedback_count,updated_at FROM neural_rankers WHERE company_id=?',(company_id,)).fetchone()
+    return {'type':'local_two_layer_neural_reranker','version':row['version'] if row else 0,
+            'feedback_count':row['feedback_count'] if row else 0,
+            'learns_from':'explicit_evaluated_source_preferences',
+            'general_intelligence':False, 'trained_foundation_model':False}
+
+
+def record_neural_feedback(company_id, question, preferred_id, rejected_id):
+    """Atomic versioned update after validating that both evidence IDs belong to tenant."""
+    if not isinstance(preferred_id,str) or not isinstance(rejected_id,str) or preferred_id==rejected_id:
+        raise ValueError('Two distinct citation identifiers are required')
+    if len(preferred_id)>120 or len(rejected_id)>120:
+        raise ValueError('Citation identifier too long')
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        sources=evidence.search(db,company_id,question,limit=8)
+        by_id={r['citation_id']:r for r in sources}
+        if preferred_id not in by_id or rejected_id not in by_id:
+            raise ValueError('Both sources must be retrieved from this company for that question')
+        prior=db.execute('SELECT weights,version,feedback_count FROM neural_rankers WHERE company_id=?',(company_id,)).fetchone()
+        if prior and prior['feedback_count']>=neural.MAX_FEEDBACK:
+            raise ValueError('Learning feedback quota reached')
+        if db.execute('''SELECT 1 FROM neural_feedback WHERE company_id=? AND question=?
+                         AND preferred_id=? AND rejected_id=?''',
+                      (company_id,question,preferred_id,rejected_id)).fetchone():
+            raise ValueError('Duplicate training feedback')
+        weights=json.loads(prior['weights']) if prior else neural.initial()
+        updated,metrics=neural.train_pair(weights,question,by_id[preferred_id],by_id[rejected_id])
+        ver=prior['version']+1 if prior else 1
+        count=prior['feedback_count']+1 if prior else 1
+        db.execute('''INSERT INTO neural_rankers(company_id,weights,version,feedback_count,updated_at)
+                      VALUES(?,?,?,?,?) ON CONFLICT(company_id) DO UPDATE SET
+                      weights=excluded.weights,version=excluded.version,
+                      feedback_count=excluded.feedback_count,updated_at=excluded.updated_at''',
+                   (company_id,json.dumps(updated),ver,count,now()))
+        db.execute('INSERT INTO neural_feedback VALUES(?,?,?,?,?,?,?,?)',
+                   (uid(),company_id,question,preferred_id,rejected_id,
+                    metrics['loss_before'],metrics['loss_after'],now()))
+        log(db,company_id,'neural.ranker_updated',{'version':ver, 'loss_delta':
+                                                  round(metrics['loss_before']-metrics['loss_after'],8)})
+        db.commit()
+    return {'version':ver,'feedback_count':count,**metrics}

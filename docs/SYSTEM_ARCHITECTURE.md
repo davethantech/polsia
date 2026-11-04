@@ -25,3 +25,20 @@ Target architecture: PostgreSQL with RLS + transactional outbox + idempotent wor
 ## v0.5 tenant and presentation extensions
 
 A first-party, dependency-free cinematic HTML/CSS/JS frontend is served by FastAPI from `/assets` and `/dashboard`; it calls the same mission, knowledge, capacity and provider APIs. `app/identity.py` adds users, scrypt-password hashes, hashed browser sessions, memberships and one-use invitations. Tenant data access resolves the selected workspace's authorization server-side for **every** browser API action. Owner/editor/viewer roles restrict writes, and session-backed mutations require a synchronizer CSRF header. Legacy bearer company tokens remain supported in development for backwards compatibility, but are disabled in production by default. SQLite has no RLS; a Postgres migration remains a prerequisite for stronger horizontal multi-tenant production.
+
+## v0.6 self-hosted intelligence
+
+The previous cloud-model adapter is retired. `app/providers.py` allows only
+localhost or private Docker `ollama:11434`. Inference never shares API keys with
+external cloud models; its chosen model must be installed manually.
+
+Tenant-specific `neural_rankers` and `neural_feedback` tables store a compact,
+versioned two-layer relevance network. Each learning update requires two valid
+sources belonging to the current tenant and improves pairwise loss; global
+knowledge retraining from unverified web content is NOT present. Its ranking is
+an auxiliary signal to keyword retrieval, not scientific certainty.
+
+The mission worker has a maximum of two concurrent task slots and retains
+atomic claims, lease fencing, per-task capacity admission and capped output.
+Parallelism shares the existing SQLite database and remains suitable only for
+small local workloads, not a horizontal production cluster.

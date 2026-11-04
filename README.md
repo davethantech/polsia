@@ -1,10 +1,10 @@
-# Polsia — AI Company Operating System (v0.5)
+# Polsia — Self-hosted AI Company Operating System (v0.6)
 
 **Live, original cinematic frontend:** `/` landing page and `/dashboard` mission control; both served by the same FastAPI application without CDN dependencies.
 
 **Multi-company identity:** registered users, hashed-password sign-in, secure cookie sessions, separate company memberships, enforced tenant scope, owner/editor/viewer permissions, one-time invitations, and company switcher.
 
-**Actual execution:** the existing persistent worker, resource governor, knowledge and cultural memory, source-linked research, and opt-in AI provider integration remain integrated with the dashboard.
+**Actual execution:** the existing persistent worker, resource governor, knowledge and cultural memory, source-linked research, and opt-in **local-only** model inference and native neural memory ranking remain integrated with the dashboard.
 
 **Status:** functional single-host beta; **not certified production-ready**. See [Frontend, security and deployment checklist](docs/FRONTEND_AND_SECURITY.md) and [Hostinger deployment guidance](docs/HOSTINGER_VPS.md).
 
@@ -25,7 +25,7 @@ python -m app.worker
 
 # Autonomous Company Execution Core — verified local slice
 
-A **functional, limited execution kernel**, not the full requested AI Company Operating System. AI models, autonomous general intelligence, software engineering containers, CRM, billing, and commercial integrations are **NOT IMPLEMENTED**. Bounded opt-in public HTTPS retrieval and cultural-source refresh are implemented but not live verified. The `internal.echo` and `internal.add` tools are genuine deterministic local operations, not autonomous AI employees.
+A **functional, limited execution kernel**, not the full requested AI Company Operating System. Pretrained language-model weights are **not bundled**; a self-hosted Ollama model can be configured. Full autonomous general intelligence, a from-scratch trained language model, software engineering containers, CRM, billing, and commercial integrations are **NOT IMPLEMENTED**. Bounded opt-in public HTTPS retrieval and cultural-source refresh are implemented but not live verified. The `internal.echo` and `internal.add` tools are genuine deterministic local operations, not autonomous AI employees.
 
 ## Run locally
 
@@ -118,36 +118,82 @@ curl -X POST http://127.0.0.1:8000/culture/records \
 
 Detailed model, source policy and limitations: `docs/CULTURAL_ASTRONOMY.md`. Tests: `python -m pytest -q` (42 passed locally in this revision; no live NASA or VPS validation).
 
-## 0.4: evidence-grounded research with optional real AI
+## v0.4 to v0.6: self-hosted reasoning, learning and bounded multitasking
 
-This version adds a **single, bounded research analyst** backed by the OpenAI Responses API **when configured**, not self-learning AGI, continuous worldwide web discovery, or a multi-agent team. Its source retrieval is tenant-scoped **keyword matching**, not semantic/vector embeddings. Sources are explicitly unverified unless independently reviewed; citing one does not prove every answer claim.
+**Current design:** Polsia does not send inference requests to a hosted AI provider.
+Use a locally installed language model behind the **Ollama** service, plus Polsia's
+own persistent orchestration, evidence retrieval, source subscriptions and small
+trainable neural ranker. The neural ranker is a genuine two-layer network written
+in Python; it is **not** a newly trained foundation model, and should not be
+called superintelligence or a replacement for a capable LLM.
 
-- `GET /intelligence/evidence?query=...` retrieves up to eight company knowledge or cultural records with citation IDs, review statuses and original source metadata, without making a model call.
-- `GET /intelligence/provider` reports provider configuration (never invents a successful connection).
-- `POST /intelligence/questions` queues a persistent **read-only** research mission for the existing worker. Requires an owner token and explicit server-side provider opt-in. Insufficient evidence fails before any billable model request.
-- `intelligence.answer` is a one-attempt task tool using a fixed TLS OpenAI Responses endpoint with strict JSON-format output, source-ID checks, small context, 600-token response limit, 18-second network timeout and a UTC daily company quota (default 10 requests). It never dynamically executes model-suggested tools.
-- `GET /usage` includes provider-reported input/output tokens when available. Actual provider dollars are **unknown** because billing/pricing integration is absent; a timed-out call might still be charged.
-- API keys remain server-side and are never committed. An external model receives selected company knowledge excerpts; obtain consent and keep sensitive data out of this deployment until privacy and tenancy controls are hardened.
+### Local model startup
 
-Setup (worker and API must share the same environment):
+1. Provision a Hostinger VPS with enough **actual RAM and CPU** for the chosen
+   weights, the API, database, worker and OS. A 3 GB model-server container
+   limit does not mean every model will fit. No GPU is assumed or required.
+2. Set `POLSIA_LOCAL_MODEL` in `.env` to an exact installed model name,
+   `POLSIA_AI_ENABLED=1`, and set `POLSIA_LOCAL_AI_URL=http://ollama:11434`
+   inside Docker. Do **not** supply OpenAI or other cloud keys.
+3. After reviewing its license and disk requirements, explicitly download a
+   compatible local Ollama model, for example:
 
-```bash
-# In .env (DO NOT COMMIT IT):
-POLSIA_NETWORK_ENABLED=1
-POLSIA_AI_ENABLED=1
-POLSIA_OPENAI_MODEL=<a-model-available-to-your-account>
-POLSIA_OPENAI_API_KEY=<your-secret-from-provider>
-POLSIA_AI_DAILY_CALL_LIMIT=10
-```
+   ```bash
+   docker compose --profile local-ai up -d ollama
+   docker compose exec ollama ollama pull YOUR_REVIEWED_LOCAL_MODEL
+   docker compose --profile local-ai up -d api worker
+   ```
 
-Then queue a research question:
+   No models are pulled by the app itself. `OLLAMA_NO_CLOUD=1` and no published
+   Ollama port restrict the runtime to local use. All downloads are a deliberate
+   operator action, **not** automated internet crawling or cloud inference.
+4. `GET /intelligence/local-models` checks installed names and reachability;
+   `GET /intelligence/provider` reports configuration. A configured status
+   **does not** assert that generation succeeded.
+5. Add cited, company-owned text to `/knowledge`, register opt-in `/learning/sources`
+   on public HTTPS URLs, or use other authorized research tools. The worker
+   stores new snapshots with `retrieved_unverified` provenance rather than
+   pretending the model has trained on the entire internet.
+6. `POST /intelligence/questions` queues bounded, read-only local inference. The
+   result must cite source IDs from the correct tenant and reports uncertainty.
+   Model answers are **not** independently fact-checked by the source-ID validator.
 
-```bash
-curl -X POST http://127.0.0.1:8000/intelligence/questions \
-  -H "Authorization: Bearer $COMPANY_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"question":"Explain Jyotisha as a historical tradition","min_sources":1}'
-```
+### Polsia's own trainable neural component
 
-Add relevant evidence to `/knowledge` or `/culture/records` first. `202 Accepted` means **queued**, not answered. See `docs/GROUNDED_INTELLIGENCE.md` for the full operation, limits and acceptance checks.
+- `app/neural.py` implements a compact two-layer tanh neural ranker with bounded
+  features, reproducible weights and pairwise gradient updates.
+- `GET /intelligence/neural/status` returns the **current tenant's** trained
+  ranker version and number of accepted learning updates.
+- `GET /intelligence/evidence?query=...` returns citation IDs eligible for
+  feedback, filtered by tenant.
+- `POST /intelligence/neural/feedback` accepts:
 
-**v0.4 local verification:** `python -m pytest -q` (57 tests using mocked provider traffic; live API calls and Hostinger deployment not verified). The previous 0.1–0.3 tests remain included. Unconfigured models remain unavailable rather than simulated.
+  ```json
+  {"question":"research market analysis",
+   "preferred_citation_id":"memory:SOURCE_ID_A",
+   "rejected_citation_id":"memory:SOURCE_ID_B"}
+  ```
+
+  Only a company owner/editor can submit. Both identifiers must resolve to
+  retrieved sources inside that company. A gradient update is stored only if
+  measured pairwise loss improves; changes are versioned, capped and audited.
+  New online documents never autonomously become ground-truth training labels.
+  The weights guide **relevance ranking**, not truth, intelligence or science.
+- `python -m app.worker --workers 2` enables **at most two concurrent task
+  executions**; default is one for memory-constrained VPS environments.
+  Task claims remain transactional and resource admission is repeated for every
+  task. Do not raise the cap without load testing and an explicit budget.
+
+### Non-negotiable limits
+
+Polsia cannot instantly learn everything from internet access, train its own
+capable general-purpose foundation model on a small VPS, guarantee perfect
+reasoning or guarantee business revenue. Continuous source retrieval is not
+weight training. Avoid unaudited model self-modification. Production tenant
+isolation, security testing, load testing, and actual Hostinger deployment remain
+unverified; see `docs/SELF_HOSTED_INTELLIGENCE.md` and
+`docs/FRONTEND_AND_SECURITY.md`.
+
+**Local tests:** `python -m pytest -q`. Automated tests stub local model I/O;
+live model inference, autonomous business outcomes and Hostinger throughput are
+NOT verified.

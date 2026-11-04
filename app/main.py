@@ -1,4 +1,4 @@
-"""Small operational API. No AI provider or external integration is claimed."""
+"""Tenant-scoped application with opt-in self-hosted local inference."""
 import os
 import hashlib
 import hmac
@@ -21,7 +21,7 @@ async def lifespan(_app):
             raise RuntimeError('Disable legacy bootstrap token in production')
     yield
 
-app=FastAPI(title='Polsia — Autonomous Company OS',version='0.5.0',lifespan=lifespan,
+app=FastAPI(title='Polsia — Autonomous Company OS',version='0.6.0',lifespan=lifespan,
             docs_url=None if os.environ.get('POLSIA_ENV')=='production' else '/docs',
             redoc_url=None if os.environ.get('POLSIA_ENV')=='production' else '/redoc')
 ASSETS = Path(__file__).parent / 'static'
@@ -104,7 +104,7 @@ def operator(p=Depends(principal)):
     return p
 
 @app.get('/health')
-def health():return {'status':'ok','ai_provider':providers.configuration()['status'],'internet_research':'enabled' if os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled','external_integrations':'unconfigured','cultural_source_refresh':'enabled' if os.environ.get('POLSIA_CULTURE_REFRESH_ENABLED')=='1' and os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled'}
+def health():return {'status':'ok','ai_provider':providers.configuration()['status'],'internet_research':'enabled' if os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled','external_integrations':'unconfigured','knowledge_refresh':'enabled' if os.environ.get('POLSIA_LEARNING_ENABLED')=='1' and os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled','cultural_source_refresh':'enabled' if os.environ.get('POLSIA_CULTURE_REFRESH_ENABLED')=='1' and os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled'}
 
 @app.get('/capacity')
 def get_capacity(p=Depends(principal)):
@@ -240,17 +240,76 @@ def resume_culture(subscription_id:str,p=Depends(operator)):
     return {'status':'active'}
 
 
+
+class LearningSource(BaseModel):
+    title:str=Field(min_length=1,max_length=200)
+    topic:str=Field(min_length=1,max_length=100)
+    url:str=Field(min_length=1,max_length=2048)
+    interval_hours:int=Field(default=24,ge=24,le=2160)
+
+@app.get('/learning/sources')
+def learning_sources(p=Depends(principal)):
+    return {'sources':core.list_learning_subscriptions(p['company_id']),
+            'auto_refresh':'enabled' if os.environ.get('POLSIA_LEARNING_ENABLED')=='1'
+                        and os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled'}
+
+@app.post('/learning/sources',status_code=201)
+def add_learning_source(value:LearningSource,p=Depends(operator)):
+    try: source_id=core.create_learning_subscription(p['company_id'],value.model_dump())
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    return {'source_id':source_id,'status':'active','evidence_status':'retrieved_unverified_when_fetched'}
+
+@app.post('/learning/sources/{source_id}/pause')
+def pause_learning_source(source_id:str,p=Depends(operator)):
+    if not core.change_learning_subscription(p['company_id'],source_id,'paused'):
+        raise HTTPException(404,'Source not found')
+    return {'status':'paused'}
+
+@app.post('/learning/sources/{source_id}/resume')
+def resume_learning_source(source_id:str,p=Depends(operator)):
+    if not core.change_learning_subscription(p['company_id'],source_id,'active'):
+        raise HTTPException(404,'Source not found')
+    return {'status':'active'}
+
 # Research questions are queued as durable missions; no model call is made in
 # an API request. Retrieval also works without an AI provider configuration.
 @app.get('/intelligence/provider')
 def ai_provider(p=Depends(principal)):
     return {**providers.configuration(), 'daily_call_limit':core.daily_ai_call_limit()}
 
+@app.get('/intelligence/local-models')
+def local_model_status(p=Depends(owner)):
+    try:
+        models=providers.installed_models()
+    except providers.ProviderError:
+        raise HTTPException(503,'Self-hosted model service is not reachable or not responding')
+    selected=providers.configuration().get('model')
+    return {'runtime_reachable':True, 'models':models,
+            'selected_model_installed':bool(selected and selected in models),
+            'provider':'local_ollama', 'external_inference':False}
+
 @app.get('/intelligence/evidence')
 def retrieved_evidence(query:str,limit:int=5,p=Depends(principal)):
     try:return {'query':query,'retrieval_method':'tenant_scoped_keyword_matching',
                 'sources':core.search_evidence(p['company_id'],query,limit)}
     except ValueError as e:raise HTTPException(422,str(e))
+
+class NeuralFeedback(BaseModel):
+    question:str=Field(min_length=3,max_length=1200)
+    preferred_citation_id:str=Field(min_length=3,max_length=120)
+    rejected_citation_id:str=Field(min_length=3,max_length=120)
+
+@app.get('/intelligence/neural/status')
+def neural_status(p=Depends(principal)):
+    return core.neural_status(p['company_id'])
+
+@app.post('/intelligence/neural/feedback')
+def neural_feedback(data:NeuralFeedback,p=Depends(operator)):
+    try:
+        return core.record_neural_feedback(p['company_id'],data.question,
+            data.preferred_citation_id,data.rejected_citation_id)
+    except ValueError as e:
+        raise HTTPException(422,str(e))
 
 class IntelligenceQuestion(BaseModel):
     question:str=Field(min_length=3,max_length=1200)
@@ -267,7 +326,7 @@ def queue_question(data:IntelligenceQuestion,p=Depends(operator)):
              'inputs':data.model_dump()}])
     except ValueError as e:raise HTTPException(422,str(e))
     return {'mission_id':mission_id,'status':'ACTIVE',
-            'message':'Queued for single-attempt provider execution; no outcome claimed yet'}
+            'message':'Queued for local-only model execution; no outcome claimed yet'}
 
 
 # Auth and management routes. A browser session is a user identity, not a

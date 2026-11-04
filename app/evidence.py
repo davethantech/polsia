@@ -5,6 +5,8 @@ web or user-submitted cultural records are untrusted context, not instructions.
 """
 import html
 import re
+import json
+from . import neural
 
 TOKEN = re.compile(r'[^\W_]{2,}', re.UNICODE)
 STOP = frozenset('what when where which who how why does do did is are the this that with from about could would should into any for have has and or to in on of a an be by as at me my your tell explain describe please'.split())
@@ -70,5 +72,13 @@ def search(db, company_id, query, limit=5):
         score = sum(min(3, item['_matching_text'].count(t)) for t in terms)
         if score:
             ranked.append((score, item['recorded_at'], item))
-    ranked.sort(key=lambda s: (-s[0], -s[1], s[2]['citation_id']))
+    # Learned scores are an *additional relevance signal*, never a truth score.
+    # No online training occurs from unverified web retrieval or model outputs.
+    row = db.execute('SELECT weights FROM neural_rankers WHERE company_id=?', (company_id,)).fetchone()
+    if row is not None:
+        weights = neural.validate(json.loads(row['weights']))
+        ranked.sort(key=lambda s: (-(s[0] + max(-0.49,min(0.49,neural.score(weights,query,s[2])))),
+                                   -s[1], s[2]['citation_id']))
+    else:
+        ranked.sort(key=lambda s: (-s[0], -s[1], s[2]['citation_id']))
     return [{k: v for k, v in item.items() if k != '_matching_text'} for _, _, item in ranked[:limit]]

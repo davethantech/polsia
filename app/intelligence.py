@@ -52,7 +52,7 @@ def answer(db_factory, company_id, inputs, reserve_call, record_call):
         'limitations': content['limitations'],
         'verification': 'citation_identifiers_checked_only_not_fact_checked',
         'source_quality': 'unverified_and_user_supplied_sources_remain_unverified',
-        'provider': 'openai_responses', 'model': result['model'],
+        'provider': 'local_ollama', 'model': result['model'],
         'provider_response_id': result['provider_response_id'],
         'model_usage': result['usage'],
         'model_cost_usd': None,
