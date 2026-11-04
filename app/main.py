@@ -8,7 +8,7 @@ from fastapi import FastAPI,Header,HTTPException,Depends,Request,Response
 from fastapi.responses import FileResponse,JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel,Field
-from . import core,capacity,cosmos,culture,providers,identity
+from . import core,capacity,cosmos,culture,providers,identity,factory,workforce
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -21,7 +21,7 @@ async def lifespan(_app):
             raise RuntimeError('Disable legacy bootstrap token in production')
     yield
 
-app=FastAPI(title='Polsia — Autonomous Company OS',version='0.6.0',lifespan=lifespan,
+app=FastAPI(title='Polsia — Autonomous Company OS',version='0.7.0',lifespan=lifespan,
             docs_url=None if os.environ.get('POLSIA_ENV')=='production' else '/docs',
             redoc_url=None if os.environ.get('POLSIA_ENV')=='production' else '/redoc')
 ASSETS = Path(__file__).parent / 'static'
@@ -436,3 +436,47 @@ def missions(limit:int=50,p=Depends(principal)):
 @app.get('/companies/members')
 def members(p=Depends(principal)):
     return {'members':identity.list_members(p['company_id'])}
+
+
+# Software factory: propose code using the local model, never execute it on host.
+class FactorySnapshot(BaseModel):
+    files: dict[str,str]
+
+class FactoryRequest(FactorySnapshot):
+    goal: str = Field(min_length=10,max_length=1200)
+
+@app.get('/workforce/capabilities')
+def workforce_capabilities(p=Depends(principal)):
+    return workforce.catalog()
+
+@app.post('/factory/inspect')
+def factory_inspect(payload:FactorySnapshot,p=Depends(operator)):
+    try:return factory.inspect(payload.files)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+@app.post('/factory/missions',status_code=201)
+def create_factory_mission(payload:FactoryRequest,p=Depends(operator)):
+    try:
+        factory.validate_snapshot(payload.files)
+        goal=factory.validate_goal(payload.goal)
+        steps=[
+            {'name':'inspect','tool':'software.inspect','inputs':{'files':payload.files}},
+            {'name':'propose','tool':'software.propose','inputs':{'goal':goal,'files':payload.files},
+             'depends_on':['inspect']},
+        ]
+        mission_id=core.create_mission(p['company_id'],'Software factory: '+goal,steps)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    return {'mission_id':mission_id,'status':'ACTIVE',
+            'deliverable':'tenant_scoped_untrusted_patch_proposal',
+            'execution':'static_source_check_then_local_model_proposal',
+            'code_execution':False,'deployment':False}
+
+@app.get('/factory/proposals')
+def factory_proposals(p=Depends(principal)):
+    return core.list_factory_proposals(p['company_id'])
+
+@app.get('/factory/proposals/{proposal_id}')
+def factory_proposal(proposal_id:str,p=Depends(principal)):
+    artifact=core.get_factory_proposal(p['company_id'],proposal_id)
+    if artifact is None:raise HTTPException(404,'Proposal not found')
+    return artifact

@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const dashboard = Boolean($('appShell'));
   const state = { user: null, csrf: '', companyId: '', missions: [], overview: null, activeView: 'overview', authMode: 'login', provider: null };
-  const VIEWS = new Set(['overview','missions','knowledge','intelligence','capacity','team']);
+  const VIEWS = new Set(['overview','missions','knowledge','intelligence','capacity','team','factory']);
   function element(tag, klass, txt) {
     const n = document.createElement(tag);
     if (klass) n.className = klass;
@@ -89,6 +89,10 @@
     $('researchForm').addEventListener('submit',submitResearch);
     $('inviteForm').addEventListener('submit',submitInvitation);
     $('companyForm').addEventListener('submit',submitCompany);
+    $('factoryForm').addEventListener('submit',submitFactory);
+    $('factoryInspectButton').addEventListener('click',inspectFactory);
+    $('factoryRefresh').addEventListener('click',refreshFactory);
+    $('factoryClosePreview').addEventListener('click',()=>{$('factoryPreview').hidden=true;});
     document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelector('.sidebar')?.classList.remove('open');});
     let timer;document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshAll();});
     timer=setInterval(()=>{if(!document.hidden&&state.user)refreshAll();},30000);
@@ -97,7 +101,7 @@
     document.querySelectorAll('.view').forEach(n=>n.classList.toggle('active',n.id==='view-'+name));
     document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.view===name));
     text('currentViewLabel',name.toUpperCase());document.querySelector('.sidebar').classList.remove('open');window.scrollTo({top:0,behavior:'smooth'});
-    if(name==='capacity')refreshCapacity();if(name==='knowledge')refreshKnowledge();if(name==='team')refreshTeam();if(name==='intelligence')refreshProvider();
+    if(name==='capacity')refreshCapacity();if(name==='knowledge')refreshKnowledge();if(name==='team')refreshTeam();if(name==='intelligence')refreshProvider();if(name==='factory')refreshFactory();
   }
   async function refreshAll(){
     const company=state.companyId;
@@ -107,8 +111,8 @@
     else{feedback('missionFormMessage','Could not refresh overview: '+results[0].reason.message,true);}
     if(results[1].status==='fulfilled'){state.missions=results[1].value.missions||[];renderMissions();}
     if(results[2].status==='fulfilled'){state.provider=results[2].value;renderProvider(results[2].value);}
-    refreshCapacity();if(state.activeView==='knowledge')refreshKnowledge();if(state.activeView==='team')refreshTeam();
-    api('/health').then(d=>text('sidebarHealth',d.ai_provider==='unconfigured'?'AI provider unconfigured':'AI provider '+d.ai_provider)).catch(()=>text('sidebarHealth','Status unavailable'));
+    refreshCapacity();if(state.activeView==='knowledge')refreshKnowledge();if(state.activeView==='team')refreshTeam();if(state.activeView==='factory')refreshFactory();
+    api('/health').then(d=>text('sidebarHealth',d.ai_provider==='unconfigured'?'Local model not configured':'Local model '+d.ai_provider)).catch(()=>text('sidebarHealth','Status unavailable'));
   }
   function renderOverview(data){
     text('statMissions',qty(Object.values(data.missions||{}).reduce((n,v)=>n+v,0)));
@@ -158,5 +162,43 @@
   async function refreshTeam(){const company=state.companyId,root=$('membersList');try{const data=await api('/companies/members');if(company!==state.companyId)return;clear(root);for(const m of data.members){const row=element('div','member-item');row.append(element('span','mission-icon',m.email.charAt(0).toUpperCase()));const copy=element('div','mission-copy');copy.append(element('strong',null,m.email),element('small',null,'JOINED '+formatDate(m.joined_at)));row.append(copy,tagForStatus(m.role.toUpperCase()));root.append(row);}}catch(e){empty(root,'Members unavailable.',e.message);}}
   async function submitInvitation(e){e.preventDefault();const root=$('inviteResult');text('inviteResult','Creating single-use invitation…');try{const result=await api('/companies/invitations',{method:'POST',body:{email:$('inviteEmail').value,role:$('inviteRole').value}});clear(root);root.append(element('p',null,'Share this invitation token privately. No email was sent. It expires in 7 days.'));const code=element('code',null,result.invitation_token);root.append(code);const button=element('button','secondary-button','Copy invitation token');button.type='button';button.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(result.invitation_token);button.textContent='Copied';}catch{button.textContent='Select the token to copy';}});root.append(document.createTextNode(' '),button);$('inviteForm').reset();}catch(err){text('inviteResult',err.message);}}
   async function submitCompany(e){e.preventDefault();feedback('companyMessage','Creating workspace…');try{const result=await api('/companies',{method:'POST',body:{name:$('newCompanyName').value}});const me=await api('/auth/me');state.user=me;state.csrf=me.csrf_token;state.companyId=result.company_id;sessionStorage.setItem('polsia-company',state.companyId);updateCompanySelect();closeDialog('companyDialog');$('companyForm').reset();showView('overview');await refreshAll();}catch(err){feedback('companyMessage',err.message,true);}}
+
+  function factorySnapshot(){return {[$('factoryPath').value.trim()]:$('factorySource').value};}
+  async function inspectFactory(){
+    feedback('factoryMessage','Inspecting supplied source…');
+    try{const res=await api('/factory/inspect',{method:'POST',body:{files:factorySnapshot()}});
+      const details=res.files.map(f=>f.path+' · '+f.bytes+' bytes · '+(f.syntax.valid===false?'INVALID SYNTAX':f.syntax.checked?'SYNTAX VALID':'SYNTAX NOT CHECKED')).join('\n');
+      feedback('factoryMessage',details+'\nNo code was executed.');
+    }catch(err){feedback('factoryMessage',err.message,true);}
+  }
+  async function submitFactory(e){
+    e.preventDefault();feedback('factoryMessage','Creating an inspected, local-model engineering mission…');
+    const submit=$('factoryForm').querySelector('button[type=submit]');submit.disabled=true;
+    try{const result=await api('/factory/missions',{method:'POST',body:{goal:$('factoryGoal').value,files:factorySnapshot()}});
+      feedback('factoryMessage','Mission '+result.mission_id+' created. The worker runs the inspection, then requests a local model proposal. Check missions or refresh artifacts; no code has been executed or deployed.');
+      await refreshAll();
+    }catch(err){feedback('factoryMessage',err.message,true);}finally{submit.disabled=roleInCurrentCompany()==='viewer';}
+  }
+  async function refreshFactory(){const company=state.companyId,root=$('factoryProposals');
+    const local=state.provider?.live_requests;
+    text('factoryModelState',local?'LOCAL MODEL CONFIGURED':'MODEL NOT CONFIGURED');
+    const operator=roleInCurrentCompany()!=='viewer';
+    $('factoryForm').querySelector('button[type=submit]').disabled=!operator;
+    $('factoryInspectButton').disabled=!operator;
+    try{const proposals=await api('/factory/proposals');if(company!==state.companyId)return;clear(root);
+      if(!proposals.length){empty(root,'No engineering proposals yet.','Create a mission with the local model, run the worker, then return here for a reviewable artifact.');return;}
+      for(const item of proposals){const row=element('button','mission-item');row.type='button';const copy=element('span','mission-copy');copy.append(element('strong',null,item.summary),element('small',null,item.model+' · '+formatDate(item.created_at)));row.append(element('span','mission-icon','⌘'),copy,tagForStatus('UNTRUSTED'));row.addEventListener('click',()=>openFactoryProposal(item.id));root.append(row);}
+    }catch(err){empty(root,'Proposals unavailable.',err.message);}
+  }
+  async function openFactoryProposal(id){const company=state.companyId,body=$('factoryPreviewBody');
+    $('factoryPreview').hidden=false;empty(body,'Loading candidate…','');
+    try{const item=await api('/factory/proposals/'+encodeURIComponent(id));if(company!==state.companyId)return;
+      text('factoryPreviewTitle',item.summary);clear(body);
+      body.append(element('p','capacity-hint','UNTRUSTED CANDIDATE · NOT EXECUTED · NOT TESTED · NOT DEPLOYED'));
+      body.append(element('p','capacity-hint',item.limitations||'No limitations reported'));
+      for(const change of item.changes){const block=element('div','factory-code-block');block.append(element('strong',null,change.path+' · '+(change.syntax.checked?'syntax checked':'syntax unchecked')));
+        const code=element('pre','factory-code',change.content);block.append(code);body.append(block);}
+    }catch(err){empty(body,'Unable to open proposal.',err.message);}
+  }
   initAuth();
 })();

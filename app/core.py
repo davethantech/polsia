@@ -1,7 +1,7 @@
 """Persistent, tenant-scoped execution kernel. SQLite is for single-host development."""
 import hashlib, json, os, secrets, sqlite3, time, uuid
 from contextlib import contextmanager
-from . import capacity, mathematics, research, cosmos, culture, evidence, providers, intelligence, learning, neural
+from . import capacity, mathematics, research, cosmos, culture, evidence, providers, intelligence, learning, neural, factory
 
 DB_PATH = os.environ.get('POLSIADB', 'polsia.db')
 
@@ -80,6 +80,16 @@ def init_db():
             UNIQUE(company_id,question,preferred_id,rejected_id)
         );
         CREATE INDEX IF NOT EXISTS idx_neural_feedback_tenant ON neural_feedback(company_id,created_at);
+        CREATE TABLE IF NOT EXISTS factory_proposals (
+            id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES companies(id),
+            mission_id TEXT NOT NULL REFERENCES missions(id),
+            task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+            goal TEXT NOT NULL, summary TEXT NOT NULL, limitations TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL, changes TEXT NOT NULL, model TEXT NOT NULL,
+            verification TEXT NOT NULL, created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_tenant ON factory_proposals(company_id,created_at);
+
 
         ''')
         # Add the lease-fencing token without deleting preexisting user data.
@@ -105,11 +115,12 @@ def authenticate(token):
     return dict(row) if row else None
 
 ALLOWED_TOOLS={'internal.echo','internal.add','math.evaluate','research.fetch','knowledge.store',
-               'astronomy.horizons','astrology.zodiac','culture.record','intelligence.answer'}
+               'astronomy.horizons','astrology.zodiac','culture.record','intelligence.answer',
+               'software.inspect','software.propose'}
 TOOL_ESTIMATES={'internal.echo':(16,1),'internal.add':(16,1),'math.evaluate':(32,1),
                 'research.fetch':(64,2),'knowledge.store':(24,2),
                 'astronomy.horizons':(64,2),'astrology.zodiac':(16,1),'culture.record':(32,2),
-                'intelligence.answer':(128,3)}
+                'intelligence.answer':(128,3),'software.inspect':(48,2),'software.propose':(256,8)}
 
 def store_knowledge(company_id,layer,content,source,evidence_status='user_supplied_unverified',db=None):
     if layer not in ('company','research','math','strategy','project','episodic'):
@@ -213,6 +224,10 @@ def create_mission(company_id,objective,task_specs):
     if len(set(names))!=len(names): raise ValueError('Duplicate task names')
     for s in task_specs:
         if s['tool'] not in ALLOWED_TOOLS: raise ValueError('Tool is unavailable: '+s['tool'])
+        if s['tool'] in ('software.inspect','software.propose'):
+            source = factory.validate_snapshot(s.get('inputs',{}).get('files'))
+            if s['tool']=='software.propose':
+                factory.validate_goal(s.get('inputs',{}).get('goal'))
         if s['tool']=='intelligence.answer':
             question=s.get('inputs',{}).get('question')
             if not isinstance(question,str) or not 3<=len(question.strip())<=1200:
@@ -239,7 +254,7 @@ def create_mission(company_id,objective,task_specs):
         for s in task_specs:
             task_id=uid(); approval=bool(s.get('approval_required',False))
             db.execute('''INSERT INTO tasks(id,company_id,mission_id,name,tool,inputs,depends_on,status,approval_required,success_condition,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(task_id,company_id,mission_id,s['name'],s['tool'],json.dumps(s.get('inputs',{})),json.dumps(s.get('depends_on',[])),'WAITING_APPROVAL' if approval else 'QUEUED',int(approval),s.get('success_condition','tool_result_valid'),now()))
-            if s['tool']=='intelligence.answer':
+            if s['tool'] in ('intelligence.answer','software.propose'):
                 db.execute('UPDATE tasks SET max_attempts=1 WHERE id=?',(task_id,))
             log(db,company_id,'task.created',{'name':s['name'],'tool':s['tool']},mission_id,task_id)
         log(db,company_id,'mission.created',{'objective':objective},mission_id)
@@ -281,6 +296,14 @@ def execute_tool(tool,inputs,company_id=None,task_id=None):
                             frame=inputs.get('frame','ecliptic_of_date'))
     if tool=='culture.record':
         return culture.validate_record(inputs)
+    if tool=='software.inspect':
+        return factory.inspect(inputs.get('files'))
+    if tool=='software.propose':
+        if not company_id or not task_id:
+            raise ValueError('Missing execution context for software proposal')
+        return factory.propose(inputs,
+            reserve_call=lambda model:reserve_ai_call(company_id,task_id,model),
+            record_call=lambda status,usage:record_ai_call(company_id,task_id,status,usage))
     if tool=='intelligence.answer':
         if not company_id or not task_id:
             raise ValueError('Missing execution context')
@@ -356,7 +379,7 @@ def run_once():
                 db.commit()
             return {'status':'THROTTLED','reasons':check['reasons']}
 
-        if task['tool']=='intelligence.answer':
+        if task['tool'] in ('intelligence.answer','software.propose'):
             result=execute_tool(task['tool'],json.loads(task['inputs']),company_id=task['company_id'],task_id=task['id'])
         else:
             result=execute_tool(task['tool'],json.loads(task['inputs']))
@@ -371,6 +394,24 @@ def run_once():
             db.rollback()
             return {'task_id':task['id'],'status':'STALE_LEASE','result':None,'error':'Lease ownership changed'}
         status='SUCCEEDED' if error is None else ('FAILED' if task['attempt']+1>=task['max_attempts'] else 'QUEUED')
+        # The model's full code proposal is tenant-scoped in a separate table.
+        # Mission outputs and audit events receive only summary metadata.
+        if error is None and task['tool']=='software.propose':
+            proposal_id=uid()
+            db.execute('''INSERT INTO factory_proposals
+                (id,company_id,mission_id,task_id,goal,summary,limitations,
+                 source_sha256,changes,model,verification,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                proposal_id,task['company_id'],task['mission_id'],task['id'],
+                json.loads(task['inputs'])['goal'],result['summary'],result['limitations'],
+                json.dumps(result['source_sha256'],sort_keys=True),
+                json.dumps(result['changes'],ensure_ascii=False),result['model'],
+                result['verification'],now()))
+            result={'proposal_id':proposal_id,'status':'UNTRUSTED_CANDIDATE',
+                    'file_count':len(result['changes']),
+                    'verification':'syntax_only_not_executed_not_tested_not_deployed'}
+            log(db,task['company_id'],'factory.proposal_created',result,
+                task['mission_id'],task['id'])
         detail={'error':error} if error else {'result':result,'verification':'tool_result_valid'}
         db.execute('UPDATE tasks SET status=?,outputs=?,lease_until=NULL,lease_token=NULL,updated_at=? WHERE id=? AND status=\'RUNNING\' AND lease_token=?',(status,json.dumps(detail),now(),task['id'],task['lease_token']))
         event_detail=detail
@@ -719,3 +760,27 @@ def record_neural_feedback(company_id, question, preferred_id, rejected_id):
                                                   round(metrics['loss_before']-metrics['loss_after'],8)})
         db.commit()
     return {'version':ver,'feedback_count':count,**metrics}
+
+
+# Proposals are company-private untrusted artifacts; never expose source code in global audit logs.
+def list_factory_proposals(company_id, limit=30):
+    with connect() as db:
+        return [dict(row) for row in db.execute('''SELECT id,mission_id,task_id,goal,summary,
+            model,verification,created_at FROM factory_proposals
+            WHERE company_id=? ORDER BY created_at DESC,rowid DESC LIMIT ?''',
+            (company_id,min(50,max(1,limit))))]
+
+
+def get_factory_proposal(company_id, proposal_id):
+    with connect() as db:
+        row=db.execute('SELECT * FROM factory_proposals WHERE company_id=? AND id=?',
+                       (company_id,proposal_id)).fetchone()
+    if row is None:
+        return None
+    data=dict(row)
+    data['changes']=json.loads(data['changes'])
+    data['source_sha256']=json.loads(data['source_sha256'])
+    data['status']='UNTRUSTED_CANDIDATE'
+    data['executed']=False
+    data['deployed']=False
+    return data

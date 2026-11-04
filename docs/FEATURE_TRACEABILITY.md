@@ -65,3 +65,17 @@ Local tests: `python -m pytest -q` -> 42 passed (2026-11-02). These tests do not
 | Train capable general-purpose model entirely from scratch | NOT IMPLEMENTED | Requires training data, computing capacity and evaluation infrastructure |
 | Full autonomous one-machine-company functionality | NOT IMPLEMENTED | CRM, sales outreach, software factory and human-facing controls incomplete |
 | Real VPS deployment and live inference performance | UNVERIFIED | Requires VPS and installed licensed model |
+
+## v0.7 self-hosted engineering proposals (2026-11-04)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Deterministic source inspection with per-file SHA-256 | VERIFIED local | `app/factory.py`, `tests/test_factory.py` |
+| Path restrictions, input/output caps, Python/JSON syntax validation | VERIFIED local | `tests/test_factory.py` |
+| Local model full-file patch proposal | VERIFIED with stubbed transport; live model UNVERIFIED | `app/providers.py`, `app/factory.py` |
+| Durable inspect → propose mission dependencies | VERIFIED local | `app/core.py`, `tests/test_factory.py` |
+| Tenant-isolated proposal database/API access | VERIFIED local | `app/core.py`, `app/main.py`, `tests/test_factory.py` |
+| Model quota, one-attempt call and usage records | VERIFIED local with simulated usage | `app/core.py`, `tests/test_factory.py` |
+| Browser Software Factory interface | IMPLEMENTED_UNVERIFIED in live browser | `app/static/dashboard.html`, `app.js`, `styles.css` |
+| Actual untrusted-code execution, isolated tests, Git branches/PRs | NOT IMPLEMENTED | No code-runner or GitHub execution tool in app |
+| Live Hostinger model and production security/performance | UNVERIFIED | Requires VPS configuration and deployment checks |

@@ -197,3 +197,32 @@ unverified; see `docs/SELF_HOSTED_INTELLIGENCE.md` and
 **Local tests:** `python -m pytest -q`. Automated tests stub local model I/O;
 live model inference, autonomous business outcomes and Hostinger throughput are
 NOT verified.
+
+## v0.7 — native software-factory proposal workflow
+
+Polsia can now create a **reviewable code proposal** using an installed local Ollama
+model. This is a limited, integrated software-engineering workflow—not a claim
+of autonomous code deployment or of a model trained from scratch.
+
+- Dashboard → **Software Factory**: supply a small source snapshot (one file in
+  the browser) and goal, inspect its syntax, create a two-step mission, then
+  review saved code proposals after the worker runs.
+- `GET /workforce/capabilities` describes what is truly available and which
+  business departments remain unimplemented.
+- `POST /factory/inspect` accepts `{"files":{"src/example.py":"print(1)"}}` and
+  returns hashes, sizes, and Python/JSON syntax results without running code.
+- `POST /factory/missions` accepts `{"goal":"Improve the greeting function", "files":{"src/example.py":"def greet():\n    return 'hello'\n"}}`.
+  The mission runs `software.inspect` then `software.propose`.
+- `GET /factory/proposals` and `GET /factory/proposals/{id}` return only records
+  belonging to the authenticated company. The code candidate is stored in the
+  database and is not written to the production filesystem or Git history.
+- Requires `POLSIA_AI_ENABLED=1`, a locally installed `POLSIA_LOCAL_MODEL`, and
+  a reachable allowlisted local Ollama runtime. Without these, the proposal
+  task fails visibly; **no cloud fallback or fake success**.
+- Requests are bounded to 10 input files / 20 KB total, five changed files /
+  16 KB output, and one model attempt per proposal task. Model usage counts
+  against each company's configured daily allowance.
+- Candidate code is untrusted. Python and JSON receive static syntax checks;
+  other permitted file types are **not** syntax-validated. No generated code is
+  executed, no tests are run against the candidate, no GitHub PR is opened,
+  and no application is deployed. See `docs/SOFTWARE_FACTORY.md`.

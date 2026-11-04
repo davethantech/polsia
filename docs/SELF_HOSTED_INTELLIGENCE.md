@@ -49,3 +49,12 @@ The API/worker/neural components are unit- and integration-tested locally,
 using stubbed model transport. We have not run a trained language model on a
 real Hostinger VPS, validated commercial marketing outcomes, performed
 penetration testing or proven general intelligence.
+
+## v0.7 engineering specialist
+
+`software.inspect` is deterministic static source analysis. `software.propose`
+uses the configured local model with strict input/output bounds and stores
+untrusted candidate files under a tenant. Together these form the initial
+software engineering specialist workflow; they are **not** an autonomous
+software factory capable of building, testing and deploying an application.
+See `docs/SOFTWARE_FACTORY.md` for current restrictions and next steps.

@@ -42,3 +42,14 @@ The mission worker has a maximum of two concurrent task slots and retains
 atomic claims, lease fencing, per-task capacity admission and capped output.
 Parallelism shares the existing SQLite database and remains suitable only for
 small local workloads, not a horizontal production cluster.
+
+## v0.7 engineering workflow (implemented)
+
+Authenticated operator → `POST /factory/missions` → persistent mission with
+`software.inspect` → `software.propose` → local Ollama JSON schema → validation
+→ tenant-scoped `factory_proposals` record → authenticated candidate review.
+
+No sandbox runner, GitHub App, PR generation or deploy actions are implemented.
+The generated code is not executed. Business-agent capability discovery is an
+honest registry of implemented tools and disabled/unimplemented departments,
+not a fictional collection of general-purpose neural models.
