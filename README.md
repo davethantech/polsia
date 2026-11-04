@@ -92,3 +92,37 @@ curl -X POST http://127.0.0.1:8000/culture/records \
 ```
 
 Detailed model, source policy and limitations: `docs/CULTURAL_ASTRONOMY.md`. Tests: `python -m pytest -q` (42 passed locally in this revision; no live NASA or VPS validation).
+
+## 0.4: evidence-grounded research with optional real AI
+
+This version adds a **single, bounded research analyst** backed by the OpenAI Responses API **when configured**, not self-learning AGI, continuous worldwide web discovery, or a multi-agent team. Its source retrieval is tenant-scoped **keyword matching**, not semantic/vector embeddings. Sources are explicitly unverified unless independently reviewed; citing one does not prove every answer claim.
+
+- `GET /intelligence/evidence?query=...` retrieves up to eight company knowledge or cultural records with citation IDs, review statuses and original source metadata, without making a model call.
+- `GET /intelligence/provider` reports provider configuration (never invents a successful connection).
+- `POST /intelligence/questions` queues a persistent **read-only** research mission for the existing worker. Requires an owner token and explicit server-side provider opt-in. Insufficient evidence fails before any billable model request.
+- `intelligence.answer` is a one-attempt task tool using a fixed TLS OpenAI Responses endpoint with strict JSON-format output, source-ID checks, small context, 600-token response limit, 18-second network timeout and a UTC daily company quota (default 10 requests). It never dynamically executes model-suggested tools.
+- `GET /usage` includes provider-reported input/output tokens when available. Actual provider dollars are **unknown** because billing/pricing integration is absent; a timed-out call might still be charged.
+- API keys remain server-side and are never committed. An external model receives selected company knowledge excerpts; obtain consent and keep sensitive data out of this deployment until privacy and tenancy controls are hardened.
+
+Setup (worker and API must share the same environment):
+
+```bash
+# In .env (DO NOT COMMIT IT):
+POLSIA_NETWORK_ENABLED=1
+POLSIA_AI_ENABLED=1
+POLSIA_OPENAI_MODEL=<a-model-available-to-your-account>
+POLSIA_OPENAI_API_KEY=<your-secret-from-provider>
+POLSIA_AI_DAILY_CALL_LIMIT=10
+```
+
+Then queue a research question:
+
+```bash
+curl -X POST http://127.0.0.1:8000/intelligence/questions \
+  -H "Authorization: Bearer $COMPANY_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"question":"Explain Jyotisha as a historical tradition","min_sources":1}'
+```
+
+Add relevant evidence to `/knowledge` or `/culture/records` first. `202 Accepted` means **queued**, not answered. See `docs/GROUNDED_INTELLIGENCE.md` for the full operation, limits and acceptance checks.
+
+**v0.4 local verification:** `python -m pytest -q` (57 tests using mocked provider traffic; live API calls and Hostinger deployment not verified). The previous 0.1–0.3 tests remain included. Unconfigured models remain unavailable rather than simulated.

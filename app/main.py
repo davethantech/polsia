@@ -3,14 +3,14 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,Header,HTTPException,Depends
 from pydantic import BaseModel,Field
-from . import core,capacity,cosmos,culture
+from . import core,capacity,cosmos,culture,providers
 
 @asynccontextmanager
 async def lifespan(_app):
     core.init_db()
     yield
 
-app=FastAPI(title='Autonomous Company Execution Core',version='0.3.0',lifespan=lifespan)
+app=FastAPI(title='Autonomous Company Execution Core',version='0.4.0',lifespan=lifespan)
 
 class Bootstrap(BaseModel):
     name:str=Field(min_length=1,max_length=120)
@@ -36,7 +36,7 @@ def owner(p=Depends(principal)):
     return p
 
 @app.get('/health')
-def health():return {'status':'ok','ai_provider':'unconfigured','internet_research':'enabled' if os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled','external_integrations':'unconfigured','cultural_source_refresh':'enabled' if os.environ.get('POLSIA_CULTURE_REFRESH_ENABLED')=='1' and os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled'}
+def health():return {'status':'ok','ai_provider':providers.configuration()['status'],'internet_research':'enabled' if os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled','external_integrations':'unconfigured','cultural_source_refresh':'enabled' if os.environ.get('POLSIA_CULTURE_REFRESH_ENABLED')=='1' and os.environ.get('POLSIA_NETWORK_ENABLED')=='1' else 'disabled'}
 
 @app.get('/capacity')
 def get_capacity(p=Depends(principal)):
@@ -170,3 +170,33 @@ def resume_culture(subscription_id:str,p=Depends(owner)):
     if not core.change_culture_subscription(p['company_id'],subscription_id,'active'):
         raise HTTPException(404,'Subscription not found')
     return {'status':'active'}
+
+
+# Research questions are queued as durable missions; no model call is made in
+# an API request. Retrieval also works without an AI provider configuration.
+@app.get('/intelligence/provider')
+def ai_provider(p=Depends(principal)):
+    return {**providers.configuration(), 'daily_call_limit':core.daily_ai_call_limit()}
+
+@app.get('/intelligence/evidence')
+def retrieved_evidence(query:str,limit:int=5,p=Depends(principal)):
+    try:return {'query':query,'retrieval_method':'tenant_scoped_keyword_matching',
+                'sources':core.search_evidence(p['company_id'],query,limit)}
+    except ValueError as e:raise HTTPException(422,str(e))
+
+class IntelligenceQuestion(BaseModel):
+    question:str=Field(min_length=3,max_length=1200)
+    min_sources:int=Field(default=1,ge=1,le=4)
+
+@app.post('/intelligence/questions',status_code=202)
+def queue_question(data:IntelligenceQuestion,p=Depends(owner)):
+    config=providers.configuration()
+    if not config['live_requests']:
+        raise HTTPException(503,'AI provider is '+config['status'])
+    try:
+        mission_id=core.create_mission(p['company_id'],'Evidence-grounded research question',[
+            {'name':'grounded_answer','tool':'intelligence.answer',
+             'inputs':data.model_dump()}])
+    except ValueError as e:raise HTTPException(422,str(e))
+    return {'mission_id':mission_id,'status':'ACTIVE',
+            'message':'Queued for single-attempt provider execution; no outcome claimed yet'}

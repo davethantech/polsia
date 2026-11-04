@@ -11,3 +11,7 @@
 9. Add simulation, intelligence, self-healing, marketplace, billing; validate security and deployment.
 
 A module is complete only after it can be tested for actual persistence, effects and verification.
+
+## Next dependency: beyond the v0.4 proof of research execution
+
+The bounded provider integration and source-ID checks do not solve factual verification or multi-agent autonomy. Add PostgreSQL RLS, real research indexing, evidence freshness and contradiction detection, verified model cost attribution, independently evaluated agents and safe orchestration before expanding to autonomous business operations.

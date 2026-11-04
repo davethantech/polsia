@@ -26,3 +26,15 @@
 | Machine-learned reasoning and automated high-impact decisions | NOT_IMPLEMENTED | no provider or independent decision agent |
 
 Local tests: `python -m pytest -q` -> 42 passed (2026-11-02). These tests do not establish production safety or unrestricted autonomy.
+
+## 0.4 extension (2026-11-04)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Tenant-scoped keyword retrieval across company knowledge and culture | VERIFIED local | `app/evidence.py`, `tests/test_intelligence.py` |
+| OpenAI Responses adapter with bounded requests and strict JSON | IMPLEMENTED_UNVERIFIED (live); automated mocked tests | `app/providers.py`, `tests/test_intelligence.py` |
+| Retrieved citation-ID validation, unverified-source labeling | VERIFIED for ID checks only; factual truth UNVERIFIED | `app/intelligence.py`, `tests/test_intelligence.py` |
+| Persistent worker research missions and read-only question API | VERIFIED local with mocked provider | `app/core.py`, `app/main.py` |
+| Tenant-scoped daily provider call budget and token accounting | VERIFIED local for quotas/recorded mock usage; actual dollars NOT IMPLEMENTED | `app/core.py`, `tests/test_intelligence.py` |
+| Autonomous internet-wide research, semantic/vector memory, independent reasoning agents | NOT IMPLEMENTED | Future milestone |
+| Production model availability, scientific correctness, actual provider billing, Hostinger deployment | BLOCKED/UNVERIFIED | Requires real configuration, external evidence and deployment validation |

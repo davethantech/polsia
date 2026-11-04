@@ -1,7 +1,7 @@
 """Persistent, tenant-scoped execution kernel. SQLite is for single-host development."""
 import hashlib, json, os, secrets, sqlite3, time, uuid
 from contextlib import contextmanager
-from . import capacity, mathematics, research, cosmos, culture
+from . import capacity, mathematics, research, cosmos, culture, evidence, providers, intelligence
 
 DB_PATH = os.environ.get('POLSIADB', 'polsia.db')
 
@@ -51,6 +51,14 @@ def init_db():
             UNIQUE(company_id,url)
         );
         CREATE INDEX IF NOT EXISTS idx_culture_subscriptions_due ON culture_subscriptions(status,next_due);
+        CREATE TABLE IF NOT EXISTS ai_calls (
+            task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+            company_id TEXT NOT NULL REFERENCES companies(id),
+            model TEXT NOT NULL, attempted_at INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('reserved','completed','failed')),
+            input_tokens INTEGER, output_tokens INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_calls_company_day ON ai_calls(company_id,attempted_at);
         ''')
         # Add the lease-fencing token without deleting preexisting user data.
         if 'lease_token' not in {r['name'] for r in db.execute('PRAGMA table_info(tasks)')}:
@@ -75,10 +83,11 @@ def authenticate(token):
     return dict(row) if row else None
 
 ALLOWED_TOOLS={'internal.echo','internal.add','math.evaluate','research.fetch','knowledge.store',
-               'astronomy.horizons','astrology.zodiac','culture.record'}
+               'astronomy.horizons','astrology.zodiac','culture.record','intelligence.answer'}
 TOOL_ESTIMATES={'internal.echo':(16,1),'internal.add':(16,1),'math.evaluate':(32,1),
                 'research.fetch':(64,2),'knowledge.store':(24,2),
-                'astronomy.horizons':(64,2),'astrology.zodiac':(16,1),'culture.record':(32,2)}
+                'astronomy.horizons':(64,2),'astrology.zodiac':(16,1),'culture.record':(32,2),
+                'intelligence.answer':(128,3)}
 
 def store_knowledge(company_id,layer,content,source,evidence_status='user_supplied_unverified',db=None):
     if layer not in ('company','research','math','strategy','project','episodic'):
@@ -106,7 +115,17 @@ def search_knowledge(company_id,query='',limit=20):
 def get_usage(company_id):
     with connect() as db:
         r=db.execute('SELECT COUNT(*) AS total_tasks,COALESCE(SUM(elapsed_ms),0) AS elapsed_ms,COALESCE(SUM(input_bytes),0) AS input_bytes,COALESCE(SUM(output_bytes),0) AS output_bytes FROM usage_records WHERE company_id=?',(company_id,)).fetchone()
-        return {**dict(r),'model_tokens':None,'provider_cost_usd':None,'note':'No model-provider accounting configured; resource usage only.'}
+        ai=db.execute('''SELECT COUNT(*) AS provider_calls,
+            SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+            SUM(CASE WHEN input_tokens IS NULL OR output_tokens IS NULL THEN 1 ELSE 0 END) AS unknown_usage
+            FROM ai_calls WHERE company_id=?''',(company_id,)).fetchone()
+        return {**dict(r),'ai_calls':ai['provider_calls'],
+                'model_input_tokens':ai['input_tokens'],'model_output_tokens':ai['output_tokens'],
+                'model_tokens':(ai['input_tokens']+ai['output_tokens']
+                    if ai['unknown_usage']==0 and ai['input_tokens'] is not None
+                    and ai['output_tokens'] is not None else None),
+                'provider_cost_usd':None,
+                'note':'Model token usage is provider-reported when available; pricing/billing is not integrated.'}
 
 def estimate_mission(task_specs):
     """Planning estimates, not guaranteed capacity or billable charges."""
@@ -122,12 +141,63 @@ def estimate_mission(task_specs):
             'model_tokens':None,'provider_cost_usd':None,'confidence':'assumed_tool_budgets_not_measured',
             'execution_parallelism':1,'note':'Capacity snapshots are not reservations. Host/container quotas are enforced separately.'}
 
+def search_evidence(company_id, query, limit=5):
+    with connect() as db:
+        return evidence.search(db, company_id, query, limit)
+
+
+def daily_ai_call_limit():
+    raw=os.environ.get('POLSIA_AI_DAILY_CALL_LIMIT','10')
+    try: value=int(raw)
+    except ValueError as exc: raise ValueError('Invalid AI daily call limit') from exc
+    if not 1<=value<=100:raise ValueError('AI daily call limit must be 1–100')
+    return value
+
+
+def reserve_ai_call(company_id, task_id, model):
+    '''Atomic daily tenant call budget and at-most-once attempt per task.
+
+    A timeout can still bill externally; no silent retry is attempted.
+    '''
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        if db.execute('SELECT 1 FROM ai_calls WHERE task_id=?',(task_id,)).fetchone():
+            raise ValueError('AI request already attempted; automatic replay prohibited')
+        limit=daily_ai_call_limit()
+        count=db.execute('SELECT COUNT(*) FROM ai_calls WHERE company_id=? AND attempted_at>=?',
+                        (company_id,now()//86400*86400)).fetchone()[0]
+        if count>=limit:raise ValueError('Company daily AI call limit reached')
+        db.execute('INSERT INTO ai_calls(task_id,company_id,model,attempted_at,status) VALUES(?,?,?,?,?)',
+                   (task_id,company_id,model,now(),'reserved'))
+        log(db,company_id,'ai.request_reserved',{'task_id':task_id,'model':model})
+        db.commit()
+
+
+def record_ai_call(company_id, task_id, status, usage):
+    if status not in ('completed','failed'):raise ValueError('Invalid provider call status')
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('''UPDATE ai_calls SET status=?,input_tokens=?,output_tokens=?
+            WHERE task_id=? AND company_id=?''',
+            (status,usage.get('input_tokens'),usage.get('output_tokens'),task_id,company_id))
+        log(db,company_id,'ai.request_'+status,{'task_id':task_id,
+            'input_tokens':usage.get('input_tokens'), 'output_tokens':usage.get('output_tokens')})
+        db.commit()
+
+
 def create_mission(company_id,objective,task_specs):
     if not task_specs or len(task_specs)>30: raise ValueError('Provide 1–30 tasks')
     names=[s['name'] for s in task_specs]
     if len(set(names))!=len(names): raise ValueError('Duplicate task names')
     for s in task_specs:
         if s['tool'] not in ALLOWED_TOOLS: raise ValueError('Tool is unavailable: '+s['tool'])
+        if s['tool']=='intelligence.answer':
+            question=s.get('inputs',{}).get('question')
+            if not isinstance(question,str) or not 3<=len(question.strip())<=1200:
+                raise ValueError('Invalid research question')
+            sources=s.get('inputs',{}).get('min_sources',1)
+            if type(sources) is not int or not 1<=sources<=4:
+                raise ValueError('Invalid minimum source count')
         if s.get('success_condition','tool_result_valid')!='tool_result_valid': raise ValueError('Unknown verification condition')
         if s.get('depends_on',[]) and not set(s['depends_on']).issubset(names): raise ValueError('Unknown task dependency')
         if s['name'] in s.get('depends_on',[]): raise ValueError('Self dependency')
@@ -147,6 +217,8 @@ def create_mission(company_id,objective,task_specs):
         for s in task_specs:
             task_id=uid(); approval=bool(s.get('approval_required',False))
             db.execute('''INSERT INTO tasks(id,company_id,mission_id,name,tool,inputs,depends_on,status,approval_required,success_condition,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(task_id,company_id,mission_id,s['name'],s['tool'],json.dumps(s.get('inputs',{})),json.dumps(s.get('depends_on',[])),'WAITING_APPROVAL' if approval else 'QUEUED',int(approval),s.get('success_condition','tool_result_valid'),now()))
+            if s['tool']=='intelligence.answer':
+                db.execute('UPDATE tasks SET max_attempts=1 WHERE id=?',(task_id,))
             log(db,company_id,'task.created',{'name':s['name'],'tool':s['tool']},mission_id,task_id)
         log(db,company_id,'mission.created',{'objective':objective},mission_id)
         db.commit()
@@ -162,7 +234,7 @@ def approve(company_id,task_id):
         log(db,company_id,'task.approved',{},row['mission_id'],task_id)
         db.commit();return True
 
-def execute_tool(tool,inputs):
+def execute_tool(tool,inputs,company_id=None,task_id=None):
     if tool=='internal.echo':
         if not isinstance(inputs.get('text'),str): raise ValueError('text must be string')
         return {'text':inputs['text']}
@@ -187,6 +259,12 @@ def execute_tool(tool,inputs):
                             frame=inputs.get('frame','ecliptic_of_date'))
     if tool=='culture.record':
         return culture.validate_record(inputs)
+    if tool=='intelligence.answer':
+        if not company_id or not task_id:
+            raise ValueError('Missing execution context')
+        return intelligence.answer(connect, company_id, inputs,
+            reserve_call=lambda model:reserve_ai_call(company_id,task_id,model),
+            record_call=lambda status,usage:record_ai_call(company_id,task_id,status,usage))
     raise ValueError('Tool is unavailable')
 
 def refresh_mission_status(db, mission_id):
@@ -256,7 +334,10 @@ def run_once():
                 db.commit()
             return {'status':'THROTTLED','reasons':check['reasons']}
 
-        result=execute_tool(task['tool'],json.loads(task['inputs']))
+        if task['tool']=='intelligence.answer':
+            result=execute_tool(task['tool'],json.loads(task['inputs']),company_id=task['company_id'],task_id=task['id'])
+        else:
+            result=execute_tool(task['tool'],json.loads(task['inputs']))
         # Explicit verifier for current deterministic tools.
         if task['success_condition']!='tool_result_valid' or not isinstance(result,dict):raise ValueError('Unsupported verification condition')
     except Exception as ex: error=str(ex)[:300]
@@ -270,7 +351,12 @@ def run_once():
         status='SUCCEEDED' if error is None else ('FAILED' if task['attempt']+1>=task['max_attempts'] else 'QUEUED')
         detail={'error':error} if error else {'result':result,'verification':'tool_result_valid'}
         db.execute('UPDATE tasks SET status=?,outputs=?,lease_until=NULL,lease_token=NULL,updated_at=? WHERE id=? AND status=\'RUNNING\' AND lease_token=?',(status,json.dumps(detail),now(),task['id'],task['lease_token']))
-        log(db,task['company_id'],'task.'+status.lower(),detail,task['mission_id'],task['id'])
+        event_detail=detail
+        if task['tool']=='intelligence.answer' and not error:
+            event_detail={'provider_response_id':result.get('provider_response_id'),
+                'citation_count':len(result.get('citations',[])),
+                'verification':result.get('verification')}
+        log(db,task['company_id'],'task.'+status.lower(),event_detail,task['mission_id'],task['id'])
         if status=='SUCCEEDED' and task['tool']=='research.fetch':
             store_knowledge(task['company_id'],'research',result['excerpt'],result['url'],
                             'retrieved_unverified',db=db)
