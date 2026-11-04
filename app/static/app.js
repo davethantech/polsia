@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id);
   const dashboard = Boolean($('appShell'));
   const state = { user: null, csrf: '', companyId: '', missions: [], overview: null, activeView: 'overview', authMode: 'login', provider: null };
-  const VIEWS = new Set(['overview','missions','knowledge','intelligence','capacity','team','factory']);
+  const VIEWS = new Set(['overview','missions','knowledge','intelligence','capacity','team','factory','business']);
   function element(tag, klass, txt) {
     const n = document.createElement(tag);
     if (klass) n.className = klass;
@@ -89,6 +89,11 @@
     $('researchForm').addEventListener('submit',submitResearch);
     $('inviteForm').addEventListener('submit',submitInvitation);
     $('companyForm').addEventListener('submit',submitCompany);
+    $('businessForm').addEventListener('submit',submitBusiness);
+    $('businessLeadForm').addEventListener('submit',submitLead);
+    $('businessTicketForm').addEventListener('submit',submitTicket);
+    $('businessRefresh').addEventListener('click',refreshBusiness);
+    $('businessCloseDetails').addEventListener('click',()=>{$('businessDetails').hidden=true;});
     $('factoryForm').addEventListener('submit',submitFactory);
     $('factoryInspectButton').addEventListener('click',inspectFactory);
     $('factoryRefresh').addEventListener('click',refreshFactory);
@@ -101,7 +106,7 @@
     document.querySelectorAll('.view').forEach(n=>n.classList.toggle('active',n.id==='view-'+name));
     document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.view===name));
     text('currentViewLabel',name.toUpperCase());document.querySelector('.sidebar').classList.remove('open');window.scrollTo({top:0,behavior:'smooth'});
-    if(name==='capacity')refreshCapacity();if(name==='knowledge')refreshKnowledge();if(name==='team')refreshTeam();if(name==='intelligence')refreshProvider();if(name==='factory')refreshFactory();
+    if(name==='capacity')refreshCapacity();if(name==='knowledge')refreshKnowledge();if(name==='team')refreshTeam();if(name==='intelligence')refreshProvider();if(name==='factory')refreshFactory();if(name==='business')refreshBusiness();
   }
   async function refreshAll(){
     const company=state.companyId;
@@ -111,7 +116,7 @@
     else{feedback('missionFormMessage','Could not refresh overview: '+results[0].reason.message,true);}
     if(results[1].status==='fulfilled'){state.missions=results[1].value.missions||[];renderMissions();}
     if(results[2].status==='fulfilled'){state.provider=results[2].value;renderProvider(results[2].value);}
-    refreshCapacity();if(state.activeView==='knowledge')refreshKnowledge();if(state.activeView==='team')refreshTeam();if(state.activeView==='factory')refreshFactory();
+    refreshCapacity();if(state.activeView==='knowledge')refreshKnowledge();if(state.activeView==='team')refreshTeam();if(state.activeView==='factory')refreshFactory();if(state.activeView==='business')refreshBusiness();
     api('/health').then(d=>text('sidebarHealth',d.ai_provider==='unconfigured'?'Local model not configured':'Local model '+d.ai_provider)).catch(()=>text('sidebarHealth','Status unavailable'));
   }
   function renderOverview(data){
@@ -179,6 +184,59 @@
       await refreshAll();
     }catch(err){feedback('factoryMessage',err.message,true);}finally{submit.disabled=roleInCurrentCompany()==='viewer';}
   }
+  async function submitBusiness(e){
+    e.preventDefault();feedback('businessMessage','Creating a persisted nine-department mission…');
+    try{const result=await api('/business/programs',{method:'POST',body:{idea:$('businessIdea').value,industry:$('businessIndustry').value,market:$('businessMarket').value}});
+      feedback('businessMessage','Mission '+result.mission_id.slice(0,8)+' queued. The local model must be running; drafts will appear as departments finish.');
+      $('businessForm').reset();await refreshBusiness();await refreshAll();
+    }catch(err){feedback('businessMessage',err.message,true);}
+  }
+  async function refreshBusiness(){
+    const company=state.companyId;
+    try{
+      const [catalog,programs,leads,tickets]=await Promise.all([api('/business/capabilities'),api('/business/programs'),api('/business/leads'),api('/business/tickets')]);
+      if(company!==state.companyId)return;
+      text('businessModelTag',catalog.model_configured_unverified?'LOCAL MODEL CONFIGURED · UNVERIFIED':'LOCAL MODEL NOT CONFIGURED');
+      const roles=$('businessRoles');clear(roles);
+      for(const r of catalog.roles){const row=element('div','task-item');const info=element('div','mission-copy');
+        info.append(element('strong',null,r.name),element('small',null,r.scope));row.append(element('span','mission-icon','✳'),info,tagForStatus(r.status));roles.append(row);}
+      const root=$('businessPrograms');clear(root);
+      if(!programs.programs.length)empty(root,'No business programs yet.','Describe an idea above; the model and workforce must be configured for execution.');
+      for(const p of programs.programs){const row=element('button','mission-item');row.type='button';const info=element('span','mission-copy');
+        info.append(element('strong',null,p.idea),element('small',null,p.drafts+' / 9 draft deliverables · '+formatDate(p.created_at)));
+        row.append(element('span','mission-icon','◈'),info,tagForStatus(p.status));row.addEventListener('click',()=>openBusinessProgram(p.id));root.append(row);}
+      const leadRoot=$('businessLeads');clear(leadRoot);
+      if(!leads.leads.length)empty(leadRoot,'No contacts recorded.','Add a real supplied lead; none are invented by the model.');
+      for(const l of leads.leads){const row=element('div','task-item'),info=element('div','mission-copy');
+        info.append(element('strong',null,l.name),element('small',null,l.organization+(l.email?' · '+l.email:'')));
+        const select=element('select','workspace-select');select.setAttribute('aria-label','Lead stage for '+l.name);
+        for(const st of ['new','qualified','contacted','converted','lost']){const o=element('option',null,st);o.value=st;select.append(o);}select.value=l.stage;select.disabled=roleInCurrentCompany()==='viewer';
+        select.addEventListener('change',async()=>{try{await api('/business/leads/'+encodeURIComponent(l.id),{method:'PATCH',body:{stage:select.value}});}catch(err){feedback('leadMessage',err.message,true);select.value=l.stage;}});
+        row.append(element('span','mission-icon','♧'),info,select);leadRoot.append(row);}
+      const ticketsRoot=$('businessTickets');clear(ticketsRoot);
+      if(!tickets.tickets.length)empty(ticketsRoot,'No support tickets yet.','Create a real issue; no response will be sent automatically.');
+      for(const t of tickets.tickets){const row=element('div','task-item'),info=element('div','mission-copy');
+        info.append(element('strong',null,t.subject),element('small',null,t.message.slice(0,180)));
+        const select=element('select','workspace-select');select.setAttribute('aria-label','Ticket status for '+t.subject);
+        for(const st of ['open','needs_follow_up','closed']){const o=element('option',null,st.replaceAll('_',' '));o.value=st;select.append(o);}select.value=t.status;select.disabled=roleInCurrentCompany()==='viewer';
+        select.addEventListener('change',async()=>{try{await api('/business/tickets/'+encodeURIComponent(t.id),{method:'PATCH',body:{status:select.value}});}catch(err){feedback('ticketMessageStatus',err.message,true);select.value=t.status;}});
+        row.append(element('span','mission-icon','♧'),info,select);ticketsRoot.append(row);}
+    }catch(err){feedback('businessMessage',err.message,true);}
+  }
+  async function openBusinessProgram(id){const company=state.companyId,root=$('businessArtifacts');$('businessDetails').hidden=false;empty(root,'Loading department drafts…','');
+    try{const data=await api('/business/programs/'+encodeURIComponent(id));if(company!==state.companyId)return;clear(root);
+      text('businessDetailsTitle',data.program.idea.slice(0,90));
+      if(!data.artifacts.length)empty(root,'Work queued.','Worker results appear here only when a local model returns a valid draft.');
+      for(const a of data.artifacts){const box=element('article','panel roomy'),h=element('h3',null,a.role.toUpperCase()+' · '+a.content.title);
+        box.append(h,element('p','muted',a.content.summary));
+        for(const d of a.content.deliverables){box.append(element('h4',null,d.name),element('pre','factory-code',d.content));}
+        box.append(element('p','capacity-hint','Unverified local-model draft · '+a.content.limitations));root.append(box);}
+    }catch(err){empty(root,'Unable to load company drafts.',err.message);}
+  }
+  async function submitLead(e){e.preventDefault();feedback('leadMessage','Saving lead…');try{await api('/business/leads',{method:'POST',body:{name:$('leadName').value,organization:$('leadOrg').value,email:$('leadEmail').value}});
+    $('businessLeadForm').reset();feedback('leadMessage','Lead stored under this workspace.');await refreshBusiness();}catch(err){feedback('leadMessage',err.message,true);}}
+  async function submitTicket(e){e.preventDefault();feedback('ticketMessageStatus','Saving ticket…');try{await api('/business/tickets',{method:'POST',body:{subject:$('ticketSubject').value,message:$('ticketMessage').value}});
+    $('businessTicketForm').reset();feedback('ticketMessageStatus','Ticket stored under this workspace.');await refreshBusiness();}catch(err){feedback('ticketMessageStatus',err.message,true);}}
   async function refreshFactory(){const company=state.companyId,root=$('factoryProposals');
     const local=state.provider?.live_requests;
     text('factoryModelState',local?'LOCAL MODEL CONFIGURED':'MODEL NOT CONFIGURED');
@@ -198,6 +256,28 @@
       body.append(element('p','capacity-hint',item.limitations||'No limitations reported'));
       for(const change of item.changes){const block=element('div','factory-code-block');block.append(element('strong',null,change.path+' · '+(change.syntax.checked?'syntax checked':'syntax unchecked')));
         const code=element('pre','factory-code',change.content);block.append(code);body.append(block);}
+      const controls=element('div','factory-operations');
+      const heading=element('h3',null,'Execution pipeline');controls.append(heading);
+      const mode=element('select');for(const [value,label] of [['python_syntax','Check Python in sandbox'],['python_unittest','Run Python unit tests'],['python_entrypoint','Execute Python entrypoint'],['node_test','Run Node tests']]){const option=element('option',null,label);option.value=value;mode.append(option);}
+      const entry=element('input');entry.placeholder='Entrypoint path for Python run';entry.maxLength=180;
+      const run=element('button','secondary-button','Queue isolated run');run.type='button';run.disabled=roleInCurrentCompany()==='viewer';
+      controls.append(mode,entry,run);
+      const repo=element('input');repo.placeholder='Authorized owner/repository';repo.maxLength=181;
+      const publish=element('button','secondary-button','Create draft pull request');publish.type='button';publish.disabled=roleInCurrentCompany()!=='owner';controls.append(repo,publish);
+      const environment=element('select');for(const target of ['staging','production']){const o=element('option',null,target);o.value=target;environment.append(o);}
+      const publishJob=element('input');publishJob.placeholder='Published PR job ID';publishJob.maxLength=80;
+      const deploy=element('button','secondary-button','Request deployment approval');deploy.type='button';deploy.disabled=roleInCurrentCompany()!=='owner';
+      controls.append(publishJob,environment,deploy);
+      const notice=element('p','form-feedback','No code executes on this web server; a separately configured runner is required.');controls.append(notice);
+      const history=element('div','factory-job-history');controls.append(history);body.append(controls);
+      const fresh=async()=>{const all=await api('/factory/jobs?proposal_id='+encodeURIComponent(id));if(company!==state.companyId)return;clear(history);for(const j of all.jobs){
+        const line=element('div','capacity-hint',j.kind+' · '+j.status+' · '+j.id);const detail=element('button','soft-link','Details');detail.type='button';detail.addEventListener('click',async()=>{try{const v=await api('/factory/jobs/'+encodeURIComponent(j.id));notice.textContent=JSON.stringify(v.result||v.status).slice(0,5000);}catch(e){notice.textContent=e.message;}});
+        line.append(detail);if(j.kind==='deploy'&&j.status==='WAITING_APPROVAL'&&roleInCurrentCompany()==='owner'){const approve=element('button','secondary-button','Approve deployment');approve.type='button';approve.addEventListener('click',async()=>{try{await api('/factory/deployments/'+encodeURIComponent(j.id)+'/approve',{method:'POST'});notice.textContent='Deployment approved; external workflow not yet confirmed.';await fresh();}catch(e){notice.textContent=e.message;}});line.append(approve);}history.append(line);
+      }};
+      run.addEventListener('click',async()=>{try{const result=await api('/factory/proposals/'+encodeURIComponent(id)+'/tests',{method:'POST',body:{mode:mode.value,entrypoint:mode.value==='python_entrypoint'?entry.value.trim():null}});notice.textContent='Test queued: '+result.job_id;await fresh();}catch(e){notice.textContent=e.message;}});
+      publish.addEventListener('click',async()=>{try{const result=await api('/factory/proposals/'+encodeURIComponent(id)+'/pull-requests',{method:'POST',body:{repo:repo.value.trim()}});notice.textContent='PR job queued: '+result.job_id;await fresh();}catch(e){notice.textContent=e.message;}});
+      deploy.addEventListener('click',async()=>{try{const result=await api('/factory/proposals/'+encodeURIComponent(id)+'/deployments',{method:'POST',body:{publish_job_id:publishJob.value.trim(),environment:environment.value}});notice.textContent='Approval required for deployment job '+result.job_id;await fresh();}catch(e){notice.textContent=e.message;}});
+      await fresh();
     }catch(err){empty(body,'Unable to open proposal.',err.message);}
   }
   initAuth();

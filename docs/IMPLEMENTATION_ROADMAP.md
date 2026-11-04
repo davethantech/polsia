@@ -19,3 +19,17 @@ The bounded provider integration and source-ID checks do not solve factual verif
 ## v0.5 milestone
 
 Built locally: cinematic landing page, real-data mission control frontend, user/password login, tenant membership/roles, invitation redemption, CSRF-protected browser sessions, workspace selection, mission/knowledge/team/capacity operations, single-host SQLite backup helper and an example HTTPS reverse proxy. All changes must still receive CI and live browser/deployment validation. Next dependency: PostgreSQL + RLS, distributed sessions, concurrency testing, reverse-proxy hardening and deployed Hostinger test environment, before claiming production readiness.
+
+## v0.9 next release gates
+
+1. Run a real local model on the target VPS and measure token throughput, RAM,
+   disk usage, failure rate and quality of nine-agent plans.
+2. Integrate company program outputs into an approved engineering pipeline:
+   repository connection, feature tickets, isolated tests, draft PRs and staging.
+3. Add licensed/authorized research search, sources, company financial forecasts,
+   verified customer-data imports, lead scoring and outbound policy controls.
+4. Implement real email, payment, social and ad adapters separately, each with
+   credential storage, quotas, approvals, retries, receipts and independent
+   success verification. Never simulate success when disconnected.
+5. Migrate to PostgreSQL with tenant row-level security, perform pentesting,
+   browser QA, load testing and Hostinger staging-to-production verification.

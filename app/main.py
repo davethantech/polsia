@@ -8,7 +8,7 @@ from fastapi import FastAPI,Header,HTTPException,Depends,Request,Response
 from fastapi.responses import FileResponse,JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel,Field
-from . import core,capacity,cosmos,culture,providers,identity,factory,workforce
+from . import core,capacity,cosmos,culture,providers,identity,factory,workforce,factory_ops,business
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -21,7 +21,7 @@ async def lifespan(_app):
             raise RuntimeError('Disable legacy bootstrap token in production')
     yield
 
-app=FastAPI(title='Polsia — Autonomous Company OS',version='0.7.0',lifespan=lifespan,
+app=FastAPI(title='Polsia — Autonomous Company OS',version='0.9.0-beta',lifespan=lifespan,
             docs_url=None if os.environ.get('POLSIA_ENV')=='production' else '/docs',
             redoc_url=None if os.environ.get('POLSIA_ENV')=='production' else '/redoc')
 ASSETS = Path(__file__).parent / 'static'
@@ -41,7 +41,7 @@ async def secure_headers(request:Request,call_next):
     response.headers['Content-Security-Policy']=("default-src 'self'; script-src 'self'; "
       "style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; "
       "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
-    if request.url.path.startswith(('/auth','/missions','/overview','/companies','/knowledge','/usage','/capacity')):
+    if request.url.path.startswith(('/auth','/missions','/overview','/companies','/knowledge','/usage','/capacity','/factory','/business')):
         response.headers['Cache-Control']='no-store'
     return response
 
@@ -480,3 +480,127 @@ def factory_proposal(proposal_id:str,p=Depends(principal)):
     artifact=core.get_factory_proposal(p['company_id'],proposal_id)
     if artifact is None:raise HTTPException(404,'Proposal not found')
     return artifact
+
+
+# Factory operations are durable and never execute code, touch Docker, or use
+# GitHub credentials inside HTTP request handlers. Jobs use specialized workers.
+class FactoryTestRequest(BaseModel):
+    mode: str = Field(pattern=r"^(python_unittest|python_syntax|python_entrypoint|node_test)$")
+    entrypoint: str | None = None
+
+class FactoryPublishRequest(BaseModel):
+    repo: str = Field(max_length=181)
+
+class FactoryDeployRequest(BaseModel):
+    publish_job_id: str
+    environment: str = Field(pattern=r"^(staging|production)$")
+
+@app.post('/factory/proposals/{proposal_id}/tests',status_code=202)
+def factory_test(proposal_id:str,payload:FactoryTestRequest,p=Depends(operator)):
+    try:
+        ident=factory_ops.queue_test(core,p['company_id'],proposal_id,payload.mode,payload.entrypoint)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    return {'job_id':ident,'status':'QUEUED','runtime':'isolated_docker_runner_required'}
+
+@app.post('/factory/proposals/{proposal_id}/pull-requests',status_code=202)
+def factory_publish(proposal_id:str,payload:FactoryPublishRequest,p=Depends(owner)):
+    try:ident=factory_ops.queue_publish(core,p['company_id'],proposal_id,payload.repo)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    return {'job_id':ident,'status':'QUEUED','publish':'draft_pr_after_github_verification'}
+
+@app.post('/factory/proposals/{proposal_id}/deployments',status_code=202)
+def factory_deploy(proposal_id:str,payload:FactoryDeployRequest,p=Depends(owner)):
+    try:ident=factory_ops.queue_deploy(core,p['company_id'],proposal_id,payload.publish_job_id,payload.environment)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    return {'job_id':ident,'status':'WAITING_APPROVAL','deployment':False}
+
+@app.post('/factory/deployments/{job_id}/approve')
+def factory_deploy_approve(job_id:str,p=Depends(owner)):
+    try:accepted=factory_ops.approve_deploy(core,p['company_id'],job_id)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    if not accepted:raise HTTPException(404,'Pending deployment approval not found')
+    return {'job_id':job_id,'status':'QUEUED','deployment':False}
+
+@app.get('/factory/jobs')
+def factory_jobs(proposal_id:str|None=None,p=Depends(principal)):
+    return {'jobs':factory_ops.list_jobs(core,p['company_id'],proposal_id)}
+
+@app.get('/factory/jobs/{job_id}')
+def factory_job(job_id:str,p=Depends(principal)):
+    item=factory_ops.get_job(core,p['company_id'],job_id)
+    if not item:raise HTTPException(404,'Factory job not found')
+    return item
+
+
+# Self-hosted business team: structured draft artifacts, not completed outside actions.
+class BusinessLaunch(BaseModel):
+    idea: str = Field(min_length=12,max_length=1200)
+    industry: str = Field(default='',max_length=120)
+    market: str = Field(default='',max_length=120)
+
+@app.get('/business/capabilities')
+def business_capabilities(p=Depends(principal)):
+    return business.capabilities()
+
+@app.post('/business/programs',status_code=201)
+def launch_business(payload:BusinessLaunch,p=Depends(operator)):
+    try:return business.launch(core,p['company_id'],payload.idea,payload.industry,payload.market)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+@app.get('/business/programs')
+def business_programs(p=Depends(principal)):
+    return {'programs':business.get_programs(core,p['company_id'])}
+
+@app.get('/business/programs/{program_id}')
+def business_program_detail(program_id:str,p=Depends(principal)):
+    programs=business.get_programs(core,p['company_id'])
+    program=next((item for item in programs if item['id']==program_id),None)
+    if not program:raise HTTPException(404,'Business program not found')
+    artifacts=business.get_artifacts(core,p['company_id'],program['mission_id'])
+    return {'program':program,'artifacts':artifacts,'mission':core.get_mission(p['company_id'],program['mission_id'])}
+
+
+# Tenant-scoped real CRM and support records. No external sending is implied.
+class LeadIn(BaseModel):
+    name:str=Field(min_length=2,max_length=120)
+    organization:str=Field(default='',max_length=150)
+    email:str=Field(default='',max_length=254)
+    notes:str=Field(default='',max_length=1800)
+
+class LeadStage(BaseModel):
+    stage:str=Field(pattern=r'^(new|qualified|contacted|converted|lost)$')
+
+@app.post('/business/leads',status_code=201)
+def create_business_lead(data:LeadIn,p=Depends(operator)):
+    try:return business.add_lead(core,p['company_id'],data.name,data.organization,data.email,data.notes)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+@app.get('/business/leads')
+def list_business_leads(p=Depends(principal)):
+    return {'leads':business.leads(core,p['company_id'])}
+
+@app.patch('/business/leads/{lead_id}')
+def set_lead_stage(lead_id:str,data:LeadStage,p=Depends(operator)):
+    if not business.update_lead(core,p['company_id'],lead_id,data.stage):raise HTTPException(404,'Lead not found')
+    return {'id':lead_id,'stage':data.stage}
+
+class TicketIn(BaseModel):
+    subject:str=Field(min_length=3,max_length=180)
+    message:str=Field(min_length=3,max_length=5000)
+
+class TicketStatus(BaseModel):
+    status:str=Field(pattern=r'^(open|needs_follow_up|closed)$')
+
+@app.post('/business/tickets',status_code=201)
+def create_business_ticket(data:TicketIn,p=Depends(operator)):
+    try:return business.add_ticket(core,p['company_id'],data.subject,data.message)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+@app.get('/business/tickets')
+def list_business_tickets(p=Depends(principal)):
+    return {'tickets':business.tickets(core,p['company_id'])}
+
+@app.patch('/business/tickets/{ticket_id}')
+def set_ticket_status(ticket_id:str,data:TicketStatus,p=Depends(operator)):
+    if not business.update_ticket(core,p['company_id'],ticket_id,data.status):raise HTTPException(404,'Ticket not found')
+    return {'id':ticket_id,'status':data.status}

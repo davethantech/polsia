@@ -79,3 +79,17 @@ Local tests: `python -m pytest -q` -> 42 passed (2026-11-02). These tests do not
 | Browser Software Factory interface | IMPLEMENTED_UNVERIFIED in live browser | `app/static/dashboard.html`, `app.js`, `styles.css` |
 | Actual untrusted-code execution, isolated tests, Git branches/PRs | NOT IMPLEMENTED | No code-runner or GitHub execution tool in app |
 | Live Hostinger model and production security/performance | UNVERIFIED | Requires VPS configuration and deployment checks |
+
+## v0.9 beta — company generation and business workforce
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Durable nine-role company program and dependency graph | VERIFIED local with stubbed model | `app/business.py`, `tests/test_business.py` |
+| Local-model generated business department drafts | VERIFIED shape/persistence with stubbed responses; live model UNVERIFIED | `app/providers.py`, `app/core.py`, `tests/test_business.py` |
+| Tenant-scoped business artifacts and provenance labels | VERIFIED local | `tests/test_business.py` |
+| Actual CRM lead records and stage updates | VERIFIED local | `tests/test_business.py` |
+| Actual support ticket records and status updates | VERIFIED local | `tests/test_business.py` |
+| Company Studio frontend and tenant switching | IMPLEMENTED; live browser screenshot validation UNVERIFIED | `app/static/dashboard.html`, `app/static/app.js` |
+| Running generated code, tests, draft PR & deployment | IMPLEMENTED as opt-in code paths, runtime/credentials UNVERIFIED | `app/factory_sandbox.py`, `factory_github.py`, `factory_runner.py` |
+| Real market search, customer discovery, Stripe, Meta, outbound email, social publishing | NOT IMPLEMENTED / NOT CONNECTED | No genuine integration calls or credentials |
+| Full business automation and production hosting | NOT IMPLEMENTED | Requires real integrations and production validation |

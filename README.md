@@ -226,3 +226,24 @@ of autonomous code deployment or of a model trained from scratch.
   other permitted file types are **not** syntax-validated. No generated code is
   executed, no tests are run against the candidate, no GitHub PR is opened,
   and no application is deployed. See `docs/SOFTWARE_FACTORY.md`.
+
+## v0.9 beta — Autonomous business workforce & Company Studio
+
+The cinematic dashboard now has a **Company Studio** tab. With a real local
+Ollama model enabled and installed, enter a business idea to create a persisted,
+nine-specialist mission covering CEO/strategy, research, product, engineering,
+marketing, sales, support, social media and operations. The worker produces
+bounded, schema-validated company-scoped **draft artifacts**, passes earlier
+verified-to-exist drafts as context, and records token usage when the model
+provides counts. It does not treat a model response as completed external work.
+
+The same workspace supports **actual user-supplied CRM leads and support tickets**
+with persisted state and tenant-scoped access. No payment, email, advertisement,
+customer outreach, social posting, automatic GitHub PR or production deployment
+is falsely claimed. Separate factory test/PR/deploy jobs are **disabled by
+operator configuration** until their isolated runners and credentials are set.
+See [Business Workforce](docs/BUSINESS_WORKFORCE.md) for API, configuration,
+limits, role definitions and the explicit capability-status matrix.
+
+This is a **tested beta, not production-ready**, and does not promise complete
+Polsia feature parity or a proprietary source-code clone.

@@ -1,13 +1,13 @@
 """Explicit tool-capability inventory, not fictional autonomous agents."""
 import os
-from . import providers
+from . import providers, business
 
 
 def catalog():
     local = providers.configuration()
     model_ready = bool(local.get('live_requests'))
     network = os.environ.get('POLSIA_NETWORK_ENABLED') == '1'
-    return {'execution_engine':'persistent_mission_dag', 'model':local,
+    basic={'execution_engine':'persistent_mission_dag', 'model':local,
       'agents':[
         {'id':'software_inspector','role':'QA / static inspector','tool':'software.inspect',
          'available':True,'mode':'deterministic','limitations':'Python/JSON syntax checks only; no runtime tests'},
@@ -27,3 +27,9 @@ def catalog():
       'unimplemented_roles':['autonomous_CEO','sales_operator','marketing_publisher',
                              'deployment_operator','finance_transaction_agent'],
       'agent_count_claim':'only listed capabilities are implemented; these are roles, not separate neural models'}
+    basic['agents'].extend({'id':'business_'+role,'role':title+' / business draft',
+      'tool':'business.draft','available':model_ready,'mode':'local_language_model',
+      'limitations':'Produces a persisted unverified business draft; does not perform third-party actions'}
+      for role,(title,_) in business.ROLES.items())
+    basic['business_execution']=business.capabilities()
+    return basic

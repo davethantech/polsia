@@ -1,7 +1,7 @@
 """Persistent, tenant-scoped execution kernel. SQLite is for single-host development."""
 import hashlib, json, os, secrets, sqlite3, time, uuid
 from contextlib import contextmanager
-from . import capacity, mathematics, research, cosmos, culture, evidence, providers, intelligence, learning, neural, factory
+from . import capacity, mathematics, research, cosmos, culture, evidence, providers, intelligence, learning, neural, factory, factory_ops, business
 
 DB_PATH = os.environ.get('POLSIADB', 'polsia.db')
 
@@ -92,6 +92,8 @@ def init_db():
 
 
         ''')
+        factory_ops.init(db)
+        business.init(db)
         # Add the lease-fencing token without deleting preexisting user data.
         if 'lease_token' not in {r['name'] for r in db.execute('PRAGMA table_info(tasks)')}:
             db.execute('ALTER TABLE tasks ADD COLUMN lease_token TEXT')
@@ -116,11 +118,11 @@ def authenticate(token):
 
 ALLOWED_TOOLS={'internal.echo','internal.add','math.evaluate','research.fetch','knowledge.store',
                'astronomy.horizons','astrology.zodiac','culture.record','intelligence.answer',
-               'software.inspect','software.propose'}
+               'software.inspect','software.propose','business.draft'}
 TOOL_ESTIMATES={'internal.echo':(16,1),'internal.add':(16,1),'math.evaluate':(32,1),
                 'research.fetch':(64,2),'knowledge.store':(24,2),
                 'astronomy.horizons':(64,2),'astrology.zodiac':(16,1),'culture.record':(32,2),
-                'intelligence.answer':(128,3),'software.inspect':(48,2),'software.propose':(256,8)}
+                'intelligence.answer':(128,3),'software.inspect':(48,2),'software.propose':(256,8),'business.draft':(256,8)}
 
 def store_knowledge(company_id,layer,content,source,evidence_status='user_supplied_unverified',db=None):
     if layer not in ('company','research','math','strategy','project','episodic'):
@@ -218,7 +220,7 @@ def record_ai_call(company_id, task_id, status, usage):
         db.commit()
 
 
-def create_mission(company_id,objective,task_specs):
+def create_mission(company_id,objective,task_specs,on_create=None):
     if not task_specs or len(task_specs)>30: raise ValueError('Provide 1–30 tasks')
     names=[s['name'] for s in task_specs]
     if len(set(names))!=len(names): raise ValueError('Duplicate task names')
@@ -228,6 +230,11 @@ def create_mission(company_id,objective,task_specs):
             source = factory.validate_snapshot(s.get('inputs',{}).get('files'))
             if s['tool']=='software.propose':
                 factory.validate_goal(s.get('inputs',{}).get('goal'))
+        if s['tool']=='business.draft':
+            if s.get('inputs',{}).get('role') not in business.ROLES:
+                raise ValueError('Unknown business role')
+            brief=s.get('inputs',{}).get('brief',{})
+            business.clean_brief(brief.get('idea'),brief.get('industry',''),brief.get('market',''))
         if s['tool']=='intelligence.answer':
             question=s.get('inputs',{}).get('question')
             if not isinstance(question,str) or not 3<=len(question.strip())<=1200:
@@ -254,10 +261,12 @@ def create_mission(company_id,objective,task_specs):
         for s in task_specs:
             task_id=uid(); approval=bool(s.get('approval_required',False))
             db.execute('''INSERT INTO tasks(id,company_id,mission_id,name,tool,inputs,depends_on,status,approval_required,success_condition,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(task_id,company_id,mission_id,s['name'],s['tool'],json.dumps(s.get('inputs',{})),json.dumps(s.get('depends_on',[])),'WAITING_APPROVAL' if approval else 'QUEUED',int(approval),s.get('success_condition','tool_result_valid'),now()))
-            if s['tool'] in ('intelligence.answer','software.propose'):
+            if s['tool'] in ('intelligence.answer','software.propose','business.draft'):
                 db.execute('UPDATE tasks SET max_attempts=1 WHERE id=?',(task_id,))
             log(db,company_id,'task.created',{'name':s['name'],'tool':s['tool']},mission_id,task_id)
         log(db,company_id,'mission.created',{'objective':objective},mission_id)
+        if on_create is not None:
+            on_create(db,mission_id)
         db.commit()
     return mission_id
 
@@ -304,6 +313,11 @@ def execute_tool(tool,inputs,company_id=None,task_id=None):
         return factory.propose(inputs,
             reserve_call=lambda model:reserve_ai_call(company_id,task_id,model),
             record_call=lambda status,usage:record_ai_call(company_id,task_id,status,usage))
+    if tool=='business.draft':
+        if not company_id or not task_id:
+            raise ValueError('Business task needs authenticated execution context')
+        from . import core as current_core
+        return business.execute(current_core,company_id,task_id,inputs)
     if tool=='intelligence.answer':
         if not company_id or not task_id:
             raise ValueError('Missing execution context')
@@ -379,7 +393,7 @@ def run_once():
                 db.commit()
             return {'status':'THROTTLED','reasons':check['reasons']}
 
-        if task['tool'] in ('intelligence.answer','software.propose'):
+        if task['tool'] in ('intelligence.answer','software.propose','business.draft'):
             result=execute_tool(task['tool'],json.loads(task['inputs']),company_id=task['company_id'],task_id=task['id'])
         else:
             result=execute_tool(task['tool'],json.loads(task['inputs']))
@@ -393,7 +407,9 @@ def run_once():
         if current is None or current['status']!='RUNNING' or current['lease_token']!=task['lease_token']:
             db.rollback()
             return {'task_id':task['id'],'status':'STALE_LEASE','result':None,'error':'Lease ownership changed'}
-        status='SUCCEEDED' if error is None else ('FAILED' if task['attempt']+1>=task['max_attempts'] else 'QUEUED')
+        # A local-model request may have incurred cost even if the response was lost.
+        # Never retry a business draft automatically.
+        status='SUCCEEDED' if error is None else ('FAILED' if task['tool']=='business.draft' or task['attempt']+1>=task['max_attempts'] else 'QUEUED')
         # The model's full code proposal is tenant-scoped in a separate table.
         # Mission outputs and audit events receive only summary metadata.
         if error is None and task['tool']=='software.propose':
@@ -412,6 +428,17 @@ def run_once():
                     'verification':'syntax_only_not_executed_not_tested_not_deployed'}
             log(db,task['company_id'],'factory.proposal_created',result,
                 task['mission_id'],task['id'])
+        if error is None and task['tool']=='business.draft':
+            artifact_id=uid()
+            db.execute('''INSERT INTO business_artifacts
+                (id,company_id,mission_id,task_id,role,content,model,evidence_status,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?)''',(artifact_id,task['company_id'],task['mission_id'],task['id'],
+                result['role'],json.dumps(result['document'],ensure_ascii=False),result['model'],
+                result['evidence_status'],now()))
+            result={'artifact_id':artifact_id,'role':result['role'],
+                    'evidence_status':'local_model_draft_unverified',
+                    'verification':'schema_checked_no_external_actions'}
+            log(db,task['company_id'],'business.draft_created',result,task['mission_id'],task['id'])
         detail={'error':error} if error else {'result':result,'verification':'tool_result_valid'}
         db.execute('UPDATE tasks SET status=?,outputs=?,lease_until=NULL,lease_token=NULL,updated_at=? WHERE id=? AND status=\'RUNNING\' AND lease_token=?',(status,json.dumps(detail),now(),task['id'],task['lease_token']))
         event_detail=detail
